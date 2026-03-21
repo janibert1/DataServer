@@ -52,6 +52,7 @@ export const config = {
 
   s3: {
     endpoint: optional('S3_ENDPOINT', 'http://localhost:9000'),
+    publicUrl: optional('S3_PUBLIC_URL', ''),
     accessKey: optional('S3_ACCESS_KEY', 'minio_admin'),
     secretKey: optional('S3_SECRET_KEY', 'minio_secret_key'),
     bucket: optional('S3_BUCKET', 'dataserver-files'),

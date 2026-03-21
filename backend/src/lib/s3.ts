@@ -53,12 +53,27 @@ export async function uploadToS3(
   );
 }
 
+function rewriteToPublicUrl(signedUrl: string): string {
+  if (!config.s3.publicUrl) return signedUrl;
+  try {
+    const parsed = new URL(signedUrl);
+    const publicParsed = new URL(config.s3.publicUrl);
+    parsed.hostname = publicParsed.hostname;
+    parsed.port = publicParsed.port;
+    parsed.protocol = publicParsed.protocol;
+    return parsed.toString();
+  } catch {
+    return signedUrl;
+  }
+}
+
 export async function getSignedDownloadUrl(key: string, expiresInSeconds = 300): Promise<string> {
   const command = new GetObjectCommand({
     Bucket: config.s3.bucket,
     Key: key,
   });
-  return getSignedUrl(s3Client, command, { expiresIn: expiresInSeconds });
+  const url = await getSignedUrl(s3Client, command, { expiresIn: expiresInSeconds });
+  return rewriteToPublicUrl(url);
 }
 
 export async function getSignedUploadUrl(
@@ -71,7 +86,8 @@ export async function getSignedUploadUrl(
     Key: key,
     ContentType: contentType,
   });
-  return getSignedUrl(s3Client, command, { expiresIn: expiresInSeconds });
+  const url = await getSignedUrl(s3Client, command, { expiresIn: expiresInSeconds });
+  return rewriteToPublicUrl(url);
 }
 
 export async function deleteFromS3(key: string): Promise<void> {
