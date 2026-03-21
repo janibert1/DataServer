@@ -1,5 +1,5 @@
 import { Worker, Job } from 'bullmq';
-import { redis } from '../lib/redis';
+import { config } from '../config';
 import { prisma } from '../lib/prisma';
 import { deleteFromS3 } from '../lib/s3';
 import { logger } from '../lib/logger';
@@ -130,7 +130,7 @@ export const trashCleanupWorker = new Worker<TrashCleanupJobData>(
   'trash-cleanup-queue',
   processTrashCleanupJob,
   {
-    connection: redis,
+    connection: { url: config.redis.url },
     concurrency: 1, // Only one cleanup job should run at a time
   }
 );

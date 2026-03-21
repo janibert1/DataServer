@@ -1,5 +1,4 @@
 import { Worker, Job } from 'bullmq';
-import { redis } from '../lib/redis';
 import { prisma } from '../lib/prisma';
 import { logger } from '../lib/logger';
 import { config } from '../config';
@@ -181,7 +180,7 @@ export const notificationWorker = new Worker<NotificationJobData>(
   'notification-queue',
   processNotificationJob,
   {
-    connection: redis,
+    connection: { url: config.redis.url },
     concurrency: 5,
   }
 );

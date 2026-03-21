@@ -106,9 +106,8 @@ if (config.google.clientId && config.google.clientSecret) {
           // Return profile info so route can handle invite check
           return done(null, false, {
             message: 'GOOGLE_NEW_USER',
-            // @ts-expect-error custom field
             googleProfile: { id: profile.id, email, displayName: profile.displayName, avatarUrl: profile.photos?.[0]?.value },
-          });
+          } as any);
         } catch (error) {
           logger.error('Google strategy error', { error });
           return done(error as Error);

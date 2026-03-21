@@ -1,7 +1,8 @@
 import { Queue } from 'bullmq';
-import { redis } from '../lib/redis';
+import { config } from '../config';
 
-const connection = redis;
+// Pass connection URL to BullMQ directly to avoid ioredis version conflicts
+const connection = { url: config.redis.url };
 
 const defaultJobOptions = {
   removeOnComplete: { count: 100 },

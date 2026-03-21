@@ -1,6 +1,6 @@
 import net from 'net';
 import { Worker, Job } from 'bullmq';
-import { redis } from '../lib/redis';
+import { config } from '../config';
 import { prisma } from '../lib/prisma';
 import { getObjectStream } from '../lib/s3';
 import { logger } from '../lib/logger';
@@ -155,7 +155,7 @@ export const virusScanWorker = new Worker<VirusScanJobData>(
   'virus-scan-queue',
   processVirusScanJob,
   {
-    connection: redis,
+    connection: { url: config.redis.url },
     concurrency: 2,
   }
 );

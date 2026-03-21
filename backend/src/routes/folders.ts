@@ -175,7 +175,7 @@ foldersRouter.get('/:id', async (req: Request, res: Response) => {
     }
   }
 
-  res.json({ folder: { ...folder, isStarred: folder?.starredBy.length > 0 } });
+  res.json({ folder: { ...folder, isStarred: (folder?.starredBy?.length ?? 0) > 0 } });
 });
 
 // ─── Folder contents ─────────────────────────────────────────

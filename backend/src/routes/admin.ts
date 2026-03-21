@@ -88,7 +88,7 @@ adminRouter.patch('/users/:id', async (req: Request, res: Response) => {
   }
 
   const updateData: any = {};
-  let auditAction = AuditAction.ADMIN_ACTION;
+  let auditAction: AuditAction = AuditAction.ADMIN_ACTION;
 
   switch (action) {
     case 'suspend':

@@ -1,5 +1,5 @@
 import { Worker, Job } from 'bullmq';
-import { redis } from '../lib/redis';
+import { config } from '../config';
 import { prisma } from '../lib/prisma';
 import { uploadToS3, getObjectStream } from '../lib/s3';
 import { logger } from '../lib/logger';
@@ -113,7 +113,7 @@ export const previewWorker = new Worker<PreviewJobData>(
   'preview-queue',
   processPreviewJob,
   {
-    connection: redis,
+    connection: { url: config.redis.url },
     concurrency: 3,
   }
 );
