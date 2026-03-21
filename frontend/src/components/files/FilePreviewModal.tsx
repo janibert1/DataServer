@@ -80,10 +80,10 @@ function PreviewContent({ file, previewUrl }: { file: DriveFile; previewUrl: str
 
   if (mimeType.startsWith('text/') || mimeType.includes('json') || mimeType.includes('xml')) {
     return (
-      <div className="w-full max-h-[calc(85vh-120px)] overflow-auto">
+      <div className="w-full max-h-[calc(85vh-120px)] overflow-auto rounded-lg bg-white">
         <iframe
           src={previewUrl}
-          className="w-full border-0 min-h-[400px]"
+          className="w-full border-0 min-h-[400px] bg-white"
           style={{ height: 'calc(85vh - 120px)' }}
           title={file.name}
           sandbox="allow-same-origin"
