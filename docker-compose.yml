@@ -102,7 +102,7 @@ services:
     container_name: dataserver_frontend
     restart: unless-stopped
     ports:
-      - "8080:80"
+      - "3005:80"
     depends_on:
       - backend
 
