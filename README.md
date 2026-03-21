@@ -1,6 +1,6 @@
 # DataServer
 
-A production-ready, **invitation-only** cloud storage platform built with security as a first-class concern. Think Google Drive — but self-hosted, private, and fully under your control.
+A production-ready, **invitation-only** cloud storage platform — your own self-hosted Google Drive. Built with security as a first-class concern and designed for real-world self-hosting.
 
 ![Node.js](https://img.shields.io/badge/Node.js-20+-339933?logo=node.js&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.4-3178C6?logo=typescript&logoColor=white)
@@ -14,21 +14,24 @@ A production-ready, **invitation-only** cloud storage platform built with securi
 
 - [Features](#features)
 - [Architecture](#architecture)
-- [Prerequisites](#prerequisites)
-- [Quick Start (Docker — Recommended)](#quick-start-docker--recommended)
-- [Local Development Setup](#local-development-setup)
+- [Installation](#installation)
+  - [Option A — Interactive Installer (Recommended)](#option-a--interactive-installer-recommended)
+  - [Option B — Manual Setup](#option-b--manual-setup)
 - [Environment Variables Reference](#environment-variables-reference)
+- [Access Modes](#access-modes)
+  - [Local Network Only](#local-network-only)
+  - [Tailscale (Private HTTPS)](#tailscale-private-https)
+  - [Cloudflare Tunnel (Public HTTPS)](#cloudflare-tunnel-public-https)
+- [Google OAuth Setup](#google-oauth-setup)
+- [File Storage Location](#file-storage-location)
+- [Storage Limits](#storage-limits)
 - [First Login & Admin Setup](#first-login--admin-setup)
 - [Invitation System](#invitation-system)
 - [Permission Levels](#permission-levels)
-- [Exposing to the Internet](#exposing-to-the-internet)
-  - [Cloudflare Tunnel](#cloudflare-tunnel)
-  - [Tailscale](#tailscale)
 - [Security Overview](#security-overview)
 - [Background Workers](#background-workers)
-- [API Reference](#api-reference)
-- [Project Structure](#project-structure)
-- [Direct Host Port Access](#direct-host-port-access)
+- [Local Development Setup](#local-development-setup)
+- [Updating](#updating)
 - [Troubleshooting](#troubleshooting)
 
 ---
@@ -43,369 +46,490 @@ A production-ready, **invitation-only** cloud storage platform built with securi
 | **Folder sharing** | 5 granular permission levels; permission inheritance through folder tree |
 | **File previews** | Images, PDFs, plain text, audio streaming, video streaming — all in-browser |
 | **File versioning** | Previous versions retained and restorable |
-| **Admin panel** | User management, quota control, invitation management, audit logs, content moderation, platform policy |
-| **Security** | Argon2id passwords, signed download URLs, ClamAV virus scanning, MIME validation, rate limiting |
-| **Quotas** | Per-user configurable storage quotas (default 10 GB, max file 2 GB) |
+| **Admin panel** | User management, quota control, invitation management, audit logs, content moderation |
+| **Security** | Argon2id passwords, signed download URLs (never exposed), ClamAV virus scanning, MIME validation, rate limiting |
+| **Quotas** | Per-user configurable storage quotas + optional total bucket quota |
 | **Notifications** | In-app + email notifications for shares, security events, storage warnings |
 | **Audit logging** | Immutable log of every sensitive action with user, IP, and timestamp |
-| **Background jobs** | Thumbnail generation, virus scanning, 30-day trash cleanup — all async via BullMQ |
+| **Background jobs** | Thumbnail generation, virus scanning, 30-day trash cleanup — async via BullMQ |
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                              DataServer                                  │
-│                                                                         │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────────────────┐  │
-│  │   Frontend   │    │   Backend    │    │     Object Storage       │  │
-│  │              │    │              │    │                          │  │
-│  │  React 18    │───▶│  Express.js  │───▶│  MinIO (S3-compatible)  │  │
-│  │  TypeScript  │    │  TypeScript  │    │  AES-256 encryption      │  │
-│  │  Vite        │    │  Passport.js │    │  Pre-signed URLs         │  │
-│  │  Tailwind    │    │  Prisma ORM  │    └──────────────────────────┘  │
-│  │  TanStack Q  │    │              │                                   │
-│  └──────────────┘    └──────┬───────┘    ┌──────────────────────────┐  │
-│                             │            │     Background Workers   │  │
-│  ┌──────────────┐           │            │                          │  │
-│  │  PostgreSQL  │◀──────────┤            │  BullMQ + Redis          │  │
-│  │  (Prisma)    │           │            │  • Preview generation     │  │
-│  └──────────────┘           │            │  • ClamAV virus scan     │  │
-│                             │            │  • 30-day trash cleanup  │  │
-│  ┌──────────────┐           │            │  • Email notifications   │  │
-│  │    Redis     │◀──────────┘            └──────────────────────────┘  │
-│  │  Sessions    │                                                       │
-│  │  BullMQ      │                                                       │
-│  └──────────────┘                                                       │
-└─────────────────────────────────────────────────────────────────────────┘
+Browser
+   │
+   ▼
+Tailscale Funnel / Cloudflare Tunnel / LAN
+   │
+   ▼
+nginx (frontend container :80)
+   ├── /api/*          ──► Express backend :4000
+   ├── /dataserver-files/* ──► MinIO :9000  (presigned URL proxy)
+   └── /*              ──► React SPA (index.html)
+                              │
+                              ├── PostgreSQL (Prisma ORM)
+                              ├── Redis (sessions + BullMQ queues)
+                              ├── MinIO (S3-compatible object storage)
+                              └── ClamAV (virus scanning)
 ```
 
-**Request flow:**
-1. Browser hits the nginx frontend container on port 80/443
-2. Static React app is served; API calls go to `/api/*`
-3. nginx proxies `/api/*` → Express backend on port 4000
-4. Backend reads/writes PostgreSQL via Prisma, uses Redis for sessions and job queues
-5. Files are streamed directly to MinIO; download URLs are pre-signed (never expose raw keys)
-6. Background workers handle thumbnail generation, virus scanning, and cleanup asynchronously
+**Key design decisions:**
+- MinIO presigned URLs are routed **through nginx** — browsers never need direct MinIO access
+- Session cookies are `HttpOnly; Secure; SameSite=Strict` when behind HTTPS
+- `X-Forwarded-Proto: https` is hardcoded in nginx for correct secure cookie behaviour behind Tailscale/Cloudflare
+- All file uploads pass through ClamAV before being confirmed
 
 ---
 
-## Prerequisites
+## Installation
 
-### For Docker deployment (recommended)
+### Option A — Interactive Installer (Recommended)
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows/Mac) or Docker Engine + Compose plugin (Linux)
-- Git
+A single script that installs all dependencies, asks you questions via a TUI wizard, and configures everything automatically.
 
-### For local development
+**What it installs/configures:**
+- Docker + Docker Compose (if not already present)
+- All system dependencies (git, curl, openssl)
+- DataServer services (backend, frontend, PostgreSQL, Redis, MinIO, ClamAV)
+- Your chosen access mode (local / Tailscale / Cloudflare / both)
+- Storage location and limits
+- Admin account, Google OAuth, SMTP (optional)
 
-- Node.js 20 or later — [download](https://nodejs.org/)
-- npm 10+
-- Docker (for PostgreSQL, Redis, MinIO, ClamAV)
-- Git
+**Run on your Linux server:**
 
-### Optional but recommended
+```bash
+wget -qO install.sh https://raw.githubusercontent.com/janibert1/DataServer/master/install.sh
+sudo bash install.sh
+```
 
-- A **Google Cloud** project with OAuth 2.0 credentials (for Google login)
-- An **SMTP email provider** (Gmail app password, Resend, Postmark, Mailgun, etc.)
+> The script must be downloaded first (not piped directly) because the TUI requires a TTY.
+
+**Supported operating systems:** Ubuntu, Debian, CentOS, RHEL, Fedora, Arch Linux
+
+The wizard will walk you through:
+1. Install directory
+2. Admin account credentials
+3. File storage location (Docker volume or custom path/NAS/external drive)
+4. Storage limits (total, per-user, max file size)
+5. Access mode (local / Tailscale / Cloudflare Tunnel / both)
+6. Google OAuth (optional)
+7. SMTP email (optional)
+
+At the end it builds, starts, initialises the database, seeds the admin account, sets the MinIO quota, and shows you your access URL.
 
 ---
 
-## Quick Start (Docker — Recommended)
+### Option B — Manual Setup
 
-This is the fastest way to get a fully working instance running.
-
-### Step 1 — Clone the repository
+#### Step 1 — Clone
 
 ```bash
 git clone https://github.com/janibert1/DataServer.git
 cd DataServer
 ```
 
-### Step 2 — Create your environment file
+#### Step 2 — Configure environment
 
 ```bash
 cp .env.example .env
+nano .env
 ```
 
-Open `.env` in a text editor and fill in the **required** values (marked below in the [Environment Variables](#environment-variables-reference) section). At minimum you need:
+At minimum set:
 
 ```env
-# Generate with: node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
-SESSION_SECRET=your_64_char_random_hex_string_here
-JWT_SECRET=another_64_char_random_hex_string_here
-
-# Your first admin account
+SESSION_SECRET=<64-char random hex>   # openssl rand -hex 32
+JWT_SECRET=<64-char random hex>       # openssl rand -hex 32
+POSTGRES_PASSWORD=<strong password>
+REDIS_PASSWORD=<strong password>
+MINIO_ROOT_PASSWORD=<strong password>
+S3_SECRET_KEY=<same as MINIO_ROOT_PASSWORD>
+FRONTEND_URL=http://YOUR_SERVER_IP:3005
+S3_PUBLIC_URL=http://YOUR_SERVER_IP:3005   # files proxied through nginx
+COOKIE_SECURE=false                         # set true only behind HTTPS
 ADMIN_EMAIL=admin@example.com
-ADMIN_PASSWORD=YourSecurePassword123!
-ADMIN_DISPLAY_NAME=Admin
+ADMIN_PASSWORD=YourSecurePassword123
 ```
 
-Everything else has working defaults for local use.
-
-### Step 3 — Build and start all services
+#### Step 3 — Build and start
 
 ```bash
-docker compose up -d --build
+sudo docker compose up -d --build
 ```
 
-This starts:
-- PostgreSQL 16
-- Redis 7
-- MinIO (object storage)
-- ClamAV (virus scanner — takes 2–3 minutes to download virus definitions on first start)
-- Express backend on port 4000
-- React frontend (internal Docker network only — accessed via tunnel or port mapping)
-
-> **Note:** The frontend does **not** bind to port 80 on the host by default, to avoid conflicts with other web services (Nginx, Mainsail, Caddy, etc.) that may already be running. Access is intended via Cloudflare Tunnel or Tailscale. If you want direct LAN access, see [Direct Host Port Access](#direct-host-port-access).
-
-### Step 4 — Run database migrations
+#### Step 4 — Initialise database
 
 ```bash
-docker compose exec backend npx prisma migrate deploy
+sudo docker compose exec backend npx prisma db push
+sudo docker compose exec backend node dist/seed.js
 ```
 
-### Step 5 — Seed the database (creates admin + first invite code)
+#### Step 5 — Open the app
 
-```bash
-docker compose exec backend npm run seed:prod
-```
-
-The seed script prints:
-```
-✅ Admin user created: admin@example.com
-🎉 Initial invitation code: XXXX-XXXX-XXXX  (10 uses)
-📋 Default storage policy created
-```
-
-**Save the invitation code** — you'll need it to register the first regular user account.
-
-### Step 6 — Open the app
-
-Visit [http://localhost](http://localhost) in your browser.
-
-Log in with the admin credentials you set in `.env`.
-
----
-
-## Local Development Setup
-
-Use this when you want to make code changes and see them live.
-
-### Step 1 — Start infrastructure only
-
-```bash
-docker compose up -d postgres redis minio clamav
-```
-
-### Step 2 — Set up the backend
-
-```bash
-cd backend
-npm install
-```
-
-Copy and configure environment:
-
-```bash
-cp ../.env.example ../.env
-# Edit .env — see Environment Variables section
-```
-
-Run migrations and seed:
-
-```bash
-npm run prisma:migrate:dev   # creates tables, generates Prisma client
-npm run seed                 # creates admin user + first invite code
-```
-
-Start the dev server (hot-reload via tsx):
-
-```bash
-npm run dev
-# Backend running at http://localhost:4000
-```
-
-### Step 3 — Set up the frontend
-
-Open a new terminal:
-
-```bash
-cd frontend
-npm install
-npm run dev
-# Frontend running at http://localhost:5173
-# API calls proxy to http://localhost:4000 automatically (see vite.config.ts)
-```
-
-### Step 4 — Open the app
-
-Visit [http://localhost:5173](http://localhost:5173).
+Navigate to `http://YOUR_SERVER_IP:3005` and log in with your admin credentials.
 
 ---
 
 ## Environment Variables Reference
 
-Copy `.env.example` to `.env` and fill in the values below. Lines marked **required** will prevent startup if missing.
-
 ### Core
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `NODE_ENV` | | `production` | Set to `development` for local dev |
-| `PORT` | | `4000` | Backend HTTP port |
-| `SESSION_SECRET` | **Yes** | — | Random 64-byte hex string for session signing. Generate: `node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"` |
-| `JWT_SECRET` | **Yes** | — | Random 64-byte hex string for JWT tokens |
+| Variable | Default | Description |
+|---|---|---|
+| `NODE_ENV` | `production` | Set to `development` for local dev |
+| `PORT` | `4000` | Backend HTTP port |
+| `FRONTEND_URL` | — | Full public URL of the app. Used for CORS, cookies, email links. E.g. `https://dataserver.tail1234.ts.net` |
+| `COOKIE_SECURE` | `false` | Set `true` when running behind HTTPS (Tailscale/Cloudflare). Controls `Secure` and `SameSite=Strict` on session cookies. |
 
 ### Database
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `DATABASE_URL` | **Yes** | — | Full PostgreSQL connection string. Example: `postgresql://user:pass@localhost:5432/dataserver` |
-| `POSTGRES_USER` | | `dataserver` | Used by the postgres Docker service |
-| `POSTGRES_PASSWORD` | | `dataserver_secret` | Used by the postgres Docker service — change this! |
-| `POSTGRES_DB` | | `dataserver` | Used by the postgres Docker service |
+| Variable | Default | Description |
+|---|---|---|
+| `DATABASE_URL` | — | Full PostgreSQL connection string |
+| `POSTGRES_USER` | `dataserver` | PostgreSQL user (Docker service) |
+| `POSTGRES_PASSWORD` | — | PostgreSQL password — **change this** |
+| `POSTGRES_DB` | `dataserver` | Database name |
 
 ### Redis
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `REDIS_URL` | **Yes** | — | Redis connection string. Example: `redis://:password@localhost:6379` |
-| `REDIS_PASSWORD` | | `redis_secret` | Used by the Redis Docker service — change this! |
+| Variable | Default | Description |
+|---|---|---|
+| `REDIS_URL` | — | Redis connection string, e.g. `redis://:password@redis:6379` |
+| `REDIS_PASSWORD` | — | Redis password — **change this** |
 
 ### Object Storage (MinIO / S3)
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `S3_ENDPOINT` | **Yes** | — | MinIO URL. Docker: `http://minio:9000`. External S3: leave blank |
-| `S3_REGION` | | `us-east-1` | AWS region (or any string for MinIO) |
-| `S3_BUCKET` | | `dataserver` | Bucket name (created automatically on startup) |
-| `S3_ACCESS_KEY` | **Yes** | — | MinIO root user or AWS access key |
-| `S3_SECRET_KEY` | **Yes** | — | MinIO root password or AWS secret key |
-| `MINIO_ROOT_USER` | | `minio_admin` | Used by the MinIO Docker service |
-| `MINIO_ROOT_PASSWORD` | | `minio_secret_key` | Used by the MinIO Docker service — change this! |
+| Variable | Default | Description |
+|---|---|---|
+| `S3_ENDPOINT` | `http://minio:9000` | Internal endpoint used by the backend to talk to MinIO. Keep as `http://minio:9000` in Docker. |
+| `S3_PUBLIC_URL` | — | **Browser-accessible** base URL for presigned download/preview/upload URLs. Set to your public app URL (files are proxied through nginx). E.g. `https://dataserver.tail1234.ts.net` |
+| `S3_ACCESS_KEY` | — | MinIO root user |
+| `S3_SECRET_KEY` | — | MinIO root password |
+| `S3_BUCKET` | `dataserver-files` | Bucket name (auto-created on startup) |
+| `S3_REGION` | `us-east-1` | Region (any string for MinIO) |
+| `S3_FORCE_PATH_STYLE` | `true` | Required for MinIO path-style URLs |
+| `MINIO_ROOT_USER` | — | MinIO Docker service root user |
+| `MINIO_ROOT_PASSWORD` | — | MinIO Docker service root password — **change this** |
+
+> **How presigned URLs work in this setup:**
+> Files are served through nginx (`/dataserver-files/*` → MinIO internally), so `S3_PUBLIC_URL` should be your app's public URL, not MinIO's port. This avoids mixed-content issues and keeps everything on one HTTPS endpoint.
+
+### Session & JWT
+
+| Variable | Default | Description |
+|---|---|---|
+| `SESSION_SECRET` | — | 64-byte hex string for session signing. Generate: `openssl rand -hex 32` |
+| `JWT_SECRET` | — | 64-byte hex string for JWT tokens |
+| `SESSION_MAX_AGE_MS` | `86400000` | Session lifetime in ms (default 24 hours) |
 
 ### Authentication
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `FRONTEND_URL` | **Yes** | — | Full URL of the frontend, e.g. `https://drive.example.com`. Used for CORS and email links |
-| `GOOGLE_CLIENT_ID` | | — | From [Google Cloud Console](https://console.cloud.google.com/apis/credentials) → OAuth 2.0 Client IDs |
-| `GOOGLE_CLIENT_SECRET` | | — | Same as above |
-| `GOOGLE_CALLBACK_URL` | | — | Must match exactly what you set in Google Console. Example: `https://drive.example.com/api/auth/google/callback` |
-
-> **Google OAuth setup:**
-> 1. Go to [console.cloud.google.com](https://console.cloud.google.com) → APIs & Services → Credentials
-> 2. Create OAuth 2.0 Client ID → Web application
-> 3. Add `http://localhost:5173` to Authorised JavaScript origins (dev)
-> 4. Add `http://localhost:4000/api/auth/google/callback` to Authorised redirect URIs (dev)
-> 5. For production, replace with your real domain
+| Variable | Default | Description |
+|---|---|---|
+| `GOOGLE_CLIENT_ID` | — | Google OAuth client ID (optional) |
+| `GOOGLE_CLIENT_SECRET` | — | Google OAuth client secret (optional) |
+| `GOOGLE_CALLBACK_URL` | — | Must match Google Console exactly. E.g. `https://yourapp.com/api/auth/google/callback` |
 
 ### Email (SMTP)
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `SMTP_HOST` | | — | SMTP server hostname |
-| `SMTP_PORT` | | `587` | SMTP port (587 for TLS, 465 for SSL) |
-| `SMTP_USER` | | — | SMTP username / email address |
-| `SMTP_PASS` | | — | SMTP password or app password |
-| `SMTP_FROM` | | — | From address, e.g. `"DataServer" <noreply@example.com>` |
+| Variable | Default | Description |
+|---|---|---|
+| `SMTP_HOST` | `localhost` | SMTP server |
+| `SMTP_PORT` | `587` | SMTP port (587 = TLS, 465 = SSL) |
+| `SMTP_SECURE` | `false` | Set `true` for port 465 |
+| `SMTP_USER` | — | SMTP username |
+| `SMTP_PASS` | — | SMTP password or app password |
+| `SMTP_FROM` | — | From address, e.g. `DataServer <noreply@example.com>` |
 
-> **Gmail quick setup:**
-> 1. Enable 2FA on your Google account
-> 2. Go to myaccount.google.com → Security → App Passwords
-> 3. Generate an app password for "Mail"
-> 4. Use `smtp.gmail.com`, port `587`, your Gmail address, and the app password
-
-> If SMTP is not configured, email sending is skipped silently (no crashes). Users just won't receive verification/reset emails.
-
-### Admin Bootstrap
-
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `ADMIN_EMAIL` | **Yes** | — | Email for the first admin account created by `npm run seed` |
-| `ADMIN_PASSWORD` | **Yes** | — | Password for the first admin account |
-| `ADMIN_DISPLAY_NAME` | | `Admin` | Display name for the first admin account |
+> If SMTP is not configured, email sending is silently skipped (no crashes). Users won't receive verification/reset emails.
 
 ### Storage Limits
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `DEFAULT_QUOTA_BYTES` | | `10737418240` | Default user quota (10 GB) |
-| `MAX_FILE_SIZE_BYTES` | | `2147483648` | Max upload size per file (2 GB) |
+| Variable | Default | Description |
+|---|---|---|
+| `DEFAULT_QUOTA_BYTES` | `10737418240` | Default per-user quota (10 GB) |
+| `MAX_FILE_SIZE_BYTES` | `2147483648` | Max single file size (2 GB) |
 
 ### ClamAV
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `CLAMAV_HOST` | | `clamav` | ClamAV daemon hostname (Docker service name) |
-| `CLAMAV_PORT` | | `3310` | ClamAV daemon port |
+| Variable | Default | Description |
+|---|---|---|
+| `CLAMAV_HOST` | `clamav` | ClamAV daemon hostname |
+| `CLAMAV_PORT` | `3310` | ClamAV daemon port |
 
-### Cloudflare Tunnel (optional)
+### Access (Tailscale / Cloudflare)
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `CLOUDFLARE_TUNNEL_TOKEN` | | — | Token from Cloudflare Zero Trust dashboard |
+| Variable | Description |
+|---|---|
+| `TAILSCALE_AUTHKEY` | Auth key from [login.tailscale.com/admin/settings/keys](https://login.tailscale.com/admin/settings/keys) — generate as **Reusable** |
+| `CLOUDFLARE_TOKEN` | Tunnel token from Cloudflare Zero Trust → Tunnels |
 
-### Tailscale (optional)
+### Admin Bootstrap
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `TAILSCALE_AUTHKEY` | | — | Auth key from tailscale.com/admin/settings/keys |
+| Variable | Description |
+|---|---|
+| `ADMIN_EMAIL` | Email for the first admin account (created by seed script) |
+| `ADMIN_PASSWORD` | Password for the first admin (min 8 chars, uppercase + number required) |
+| `ADMIN_DISPLAY_NAME` | Display name for the admin |
+
+---
+
+## Access Modes
+
+### Local Network Only
+
+The app is accessible on your LAN via IP address. No internet exposure.
+
+```env
+FRONTEND_URL=http://192.168.1.x:3005
+S3_PUBLIC_URL=http://192.168.1.x:3005
+COOKIE_SECURE=false
+```
+
+In `docker-compose.yml` the frontend port maps to `3005:80` (or any free port).
+
+---
+
+### Tailscale (Private HTTPS)
+
+Tailscale gives you a private `*.ts.net` HTTPS URL accessible from any of your devices, anywhere — without opening any firewall ports.
+
+#### 1. Get a Tailscale auth key
+
+Go to [login.tailscale.com/admin/settings/keys](https://login.tailscale.com/admin/settings/keys) → **Generate auth key** → check **Reusable**.
+
+#### 2. Enable HTTPS certificates
+
+[login.tailscale.com/admin/dns](https://login.tailscale.com/admin/dns) → scroll down → **Enable HTTPS Certificates** → Save.
+
+#### 3. Enable Funnel in your ACL policy
+
+[login.tailscale.com/admin/acls](https://login.tailscale.com/admin/acls) — add this top-level key:
+
+```json
+"nodeAttrs": [
+  {
+    "target": ["autogroup:member"],
+    "attr":   ["funnel"]
+  }
+]
+```
+
+#### 4. Configure `.env`
+
+Find your Tailscale hostname in [login.tailscale.com/admin/machines](https://login.tailscale.com/admin/machines). The **Docker container** registers separately as `dataserver.YOUR-TAILNET.ts.net` (based on the `hostname: dataserver` in docker-compose.yml).
+
+```env
+TAILSCALE_AUTHKEY=tskey-auth-xxxxx
+FRONTEND_URL=https://dataserver.YOUR-TAILNET.ts.net
+S3_PUBLIC_URL=https://dataserver.YOUR-TAILNET.ts.net
+COOKIE_SECURE=true
+GOOGLE_CALLBACK_URL=https://dataserver.YOUR-TAILNET.ts.net/api/auth/google/callback
+```
+
+#### 5. Update `tailscale/serve.json`
+
+Replace the hostname with your actual `*.ts.net` address:
+
+```json
+{
+  "TCP": { "443": { "HTTPS": true } },
+  "Web": {
+    "dataserver.YOUR-TAILNET.ts.net:443": {
+      "Handlers": { "/": { "Proxy": "http://frontend:80" } }
+    }
+  },
+  "AllowFunnel": {
+    "dataserver.YOUR-TAILNET.ts.net:443": true
+  }
+}
+```
+
+#### 6. Start
+
+```bash
+sudo docker compose up -d
+```
+
+> **Tailscale Funnel vs Serve:**
+> - **Serve** — accessible only to devices on your tailnet (private)
+> - **Funnel** — publicly accessible to anyone with the URL (requires the ACL step above)
+
+---
+
+### Cloudflare Tunnel (Public HTTPS)
+
+Best for: public deployment on your own domain with automatic HTTPS.
+
+#### 1. Create a tunnel
+
+Go to [dash.cloudflare.com](https://dash.cloudflare.com) → Zero Trust → Networks → Tunnels → **Create a tunnel** → Docker. Copy the tunnel token.
+
+#### 2. Configure the public hostname
+
+In the tunnel settings → **Public Hostname**:
+- Domain: `files.yourdomain.com`
+- Service Type: `HTTP`
+- URL: `frontend:80`
+
+#### 3. Configure `.env`
+
+```env
+CLOUDFLARE_TOKEN=your_tunnel_token_here
+FRONTEND_URL=https://files.yourdomain.com
+S3_PUBLIC_URL=https://files.yourdomain.com
+COOKIE_SECURE=true
+GOOGLE_CALLBACK_URL=https://files.yourdomain.com/api/auth/google/callback
+```
+
+#### 4. Start
+
+```bash
+sudo docker compose up -d
+```
+
+The `cloudflared` service in docker-compose connects to Cloudflare's network and routes traffic to `frontend:80` internally.
+
+---
+
+## Google OAuth Setup
+
+1. Go to [console.cloud.google.com](https://console.cloud.google.com) → **APIs & Services** → **Credentials**
+2. Create project if needed
+3. **OAuth consent screen** → External → fill in app name and email
+4. **Credentials** → **Create Credentials** → **OAuth 2.0 Client ID** → Web application
+5. **Authorized redirect URIs** → add:
+   ```
+   https://your-app-url/api/auth/google/callback
+   ```
+6. Copy **Client ID** and **Client Secret** into `.env`
+
+**Behaviour with invitation-only mode:**
+- Existing users can link their Google account on first Google sign-in
+- New Google users are prompted for a platform invitation code before their account is created
+
+---
+
+## File Storage Location
+
+By default, files are stored in a Docker-managed volume (`minio_data`). The actual data lives at:
+
+```
+/var/lib/docker/volumes/dataserver_minio_data/_data
+```
+
+### Using a custom path (external drive, NAS, etc.)
+
+Edit `docker-compose.yml` under the `minio` service:
+
+```yaml
+# Before (Docker volume):
+volumes:
+  - minio_data:/data
+
+# After (custom path):
+volumes:
+  - /mnt/your-drive/dataserver:/data
+```
+
+**Steps:**
+
+```bash
+# Stop MinIO
+sudo docker compose stop minio
+
+# Copy existing data to new location
+sudo cp -r /var/lib/docker/volumes/dataserver_minio_data/_data /mnt/your-drive/dataserver
+
+# Edit docker-compose.yml (change the volume line)
+nano docker-compose.yml
+
+# Start MinIO
+sudo docker compose up -d minio
+```
+
+Make sure:
+- The target path exists and is writable by Docker
+- If it's a network mount (NFS/SMB), it's in `/etc/fstab` so it mounts before Docker starts
+
+You can also browse files via the **MinIO web console** at `http://YOUR_SERVER_IP:9001` (login with your `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`).
+
+---
+
+## Storage Limits
+
+Three independent limits control storage:
+
+| Limit | Configured via | Scope |
+|---|---|---|
+| **Max file size** | `MAX_FILE_SIZE_BYTES` env var | Per-upload (enforced by backend) |
+| **Per-user quota** | `DEFAULT_QUOTA_BYTES` env var (+ per-user override in admin panel) | Per user account |
+| **Total bucket quota** | MinIO bucket quota | Entire platform |
+
+### Setting the total bucket quota
+
+After services are running:
+
+```bash
+# Set to 500 GB total
+sudo docker exec dataserver_minio \
+  mc alias set local http://localhost:9000 YOUR_MINIO_USER YOUR_MINIO_PASS
+
+sudo docker exec dataserver_minio \
+  mc quota set local/dataserver-files --size 500GiB
+```
+
+Or use the **MinIO console** at `:9001` → Buckets → dataserver-files → Summary → Quota.
+
+The interactive installer sets this automatically based on your input.
 
 ---
 
 ## First Login & Admin Setup
 
-After running `npm run seed` (or `docker compose exec backend npm run seed`):
+After seeding:
 
-1. **Log in** at your app URL with the email/password you set in `.env`
-2. **Get the invitation code** from the seed output — it's valid for 10 uses
-3. **Register a test user** by logging out and visiting `/register`, entering the code
-4. **Access the Admin Panel** by clicking your avatar → Admin Panel (top-right)
+1. Open the app URL in your browser
+2. Log in with the email and password from `.env`
+3. The seed script also creates an initial invitation code — check the seed output or create one in the Admin Panel
 
-### Admin Panel sections
+### Admin Panel
 
-| Section | URL | What you can do |
-|---|---|---|
-| Users | `/admin/users` | Search users, suspend/restore, adjust quotas, change roles, delete |
-| Invitations | `/admin/invitations` | Create platform invitations, view/revoke all codes |
-| Audit Logs | `/admin/audit` | Browse all actions with filters (user, action type, date range), export CSV |
-| Storage | `/admin/storage` | See total storage used, per-user breakdown, recalculate stats |
-| Content Flags | `/admin/flags` | Review user-reported files, quarantine or dismiss |
-| Platform Policy | `/admin/policy` | Set global defaults: quota, max file size, blocked extensions, etc. |
+Access via your avatar (top-right) → **Admin Panel**, or navigate directly:
 
-### Creating a new platform invitation
+| Section | What you can do |
+|---|---|
+| **Users** | Search, suspend/restore, adjust per-user quotas, change roles, delete |
+| **Invitations** | Create platform invitations, view/revoke all codes |
+| **Audit Logs** | Browse all actions with filters, export CSV |
+| **Storage** | Total usage, per-user breakdown, recalculate stats |
+| **Content Flags** | Review reported files, quarantine or dismiss |
+| **Platform Policy** | Set global defaults: quota, max file size, blocked extensions |
 
-1. Go to Admin Panel → Invitations
-2. Click **"Create invitation"**
-3. Optionally restrict to a specific email, set max uses and expiry date
-4. Share the generated `XXXX-XXXX-XXXX` code with the intended user
-5. They visit `/register`, enter the code, and complete sign-up
+### Creating invitations
+
+1. Admin Panel → Invitations → **Create invitation**
+2. Optionally restrict to a specific email, set max uses and expiry
+3. Share the `XXXX-XXXX-XXXX` code with the user
+4. They visit `/register`, enter the code, and complete sign-up
 
 ---
 
 ## Invitation System
 
-DataServer uses **two distinct types** of invitation codes:
-
 ### Platform Invitations
 
 - **Created by:** Admins only
-- **Purpose:** Allow a new person to create an account on the platform
-- **Format:** `XXXX-XXXX-XXXX` (uppercase alphanumeric, no ambiguous characters like 0/O/1/I)
-- **Options:** expiry date, max uses, target email restriction, optional note
+- **Purpose:** Allow someone new to create an account
+- **Options:** expiry date, max uses, email restriction, note
 
 ### Folder-Share Invitations
 
-- **Created by:** Any folder owner (for folders they own and have marked as shareable)
-- **Purpose:** Grant an existing or new user access to a specific shared folder
-- **Flow:**
-  1. Owner opens the Share modal → generates an invite link with an expiry
-  2. Recipient visits `/accept-invite?code=XXXX-XXXX-XXXX`
-  3. If not logged in, they are redirected to login/register first
-  4. On acceptance, the share is created and they land in the folder
+- **Created by:** Folder owners
+- **Purpose:** Grant an existing/new user access to a specific shared folder
+- **Flow:** Owner generates invite link → recipient visits `/accept-invite?code=…` → logs in → gains folder access
 
 ---
 
@@ -413,7 +537,7 @@ DataServer uses **two distinct types** of invitation codes:
 
 Permissions apply per-folder and are inherited by all subfolders.
 
-| Level | View files | Download | Upload | Edit / Rename / Move | Delete | Reshare |
+| Level | View | Download | Upload | Edit/Rename | Delete | Reshare |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|
 | **Viewer** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Downloader** | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
@@ -421,498 +545,153 @@ Permissions apply per-folder and are inherited by all subfolders.
 | **Editor** | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
 | **Owner** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
-**Inheritance:** If you share `/Documents` with someone as `Editor`, they automatically have `Editor` access to `/Documents/Reports` and all nested subfolders — unless you explicitly override it.
-
----
-
-## Exposing to the Internet
-
-By default the app runs on `localhost`. To access it remotely, use one of the options below.
-
-### Cloudflare Tunnel
-
-Best for: **public-facing deployment** with a custom domain.
-
-**1. Install cloudflared on your server:**
-
-```bash
-curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb -o cloudflared.deb
-sudo dpkg -i cloudflared.deb
-```
-
-**2. Authenticate and create a tunnel:**
-
-```bash
-cloudflared tunnel login
-cloudflared tunnel create dataserver
-```
-
-**3. Add your tunnel token to `.env`:**
-
-In the Cloudflare Zero Trust dashboard → Networks → Tunnels → your tunnel → Install connector → copy the `--token` value.
-
-```env
-CLOUDFLARE_TUNNEL_TOKEN=eyJhIjoiMTIz...
-```
-
-**4. Configure the public hostname:**
-
-In Cloudflare Zero Trust → Networks → Tunnels → Configure → Public Hostnames:
-
-| Subdomain | Domain | Type | URL |
-|---|---|---|---|
-| `drive` | `yourdomain.com` | HTTP | `frontend:80` |
-
-**5. Update `.env` with your domain:**
-
-```env
-FRONTEND_URL=https://drive.yourdomain.com
-```
-
-**6. Start:**
-
-```bash
-docker compose up -d --build
-```
-
-The `cloudflared` container in docker-compose.yml will connect automatically. Your app is live at `https://drive.yourdomain.com` with automatic HTTPS.
-
-**7. Port binding:**
-
-The frontend uses `expose: "80"` by default (internal Docker network only), so the tunnel connects to it via `frontend:80` without binding any host port. This means no conflict with other services like Mainsail, Nginx, or Caddy already running on port 80.
-
-If you also want direct LAN access alongside the tunnel, see [Direct Host Port Access](#direct-host-port-access) below.
-
----
-
-### Tailscale
-
-Best for: **private team/homelab access** — no public exposure needed.
-
-#### Option A — Install on host (simplest)
-
-```bash
-# On the server running Docker
-curl -fsSL https://tailscale.com/install.sh | sh
-sudo tailscale up
-```
-
-Your server gets a stable Tailscale IP and hostname (e.g. `my-server.tail1234.ts.net`).
-
-By default the frontend does not bind a host port, so you'll need either the Docker sidecar (Option B) or to temporarily map a port for direct access. See [Direct Host Port Access](#direct-host-port-access) if you want to reach it without a sidecar.
-
-#### Option B — Docker sidecar (already in docker-compose.yml)
-
-**1. Generate a Tailscale auth key:**
-
-Go to [tailscale.com/admin/settings/keys](https://login.tailscale.com/admin/settings/keys) → Generate auth key. Keep **Reusable** enabled if you want it to survive container restarts.
-
-**2. Add to `.env`:**
-
-```env
-TAILSCALE_AUTHKEY=tskey-auth-xxxxxxxxxxxxx
-```
-
-**3. Update `FRONTEND_URL`:**
-
-```env
-FRONTEND_URL=https://dataserver.tail1234.ts.net
-```
-
-**4. Start:**
-
-```bash
-docker compose up -d --build
-docker compose logs tailscale   # should show "Tailscale is up"
-```
-
-Your Tailscale node `dataserver` appears in [tailscale.com/admin/machines](https://login.tailscale.com/admin/machines) and is reachable from any device on your Tailnet.
-
-#### Tailscale Funnel (public access via Tailscale)
-
-If you want public internet access through Tailscale instead of Cloudflare:
-
-```bash
-sudo tailscale funnel 80
-```
-
-Or in `tailscale/serve.json`, add `"AllowFunnel": true` to the handler.
-
 ---
 
 ## Security Overview
 
-| Mechanism | Implementation |
+| Concern | How it's handled |
 |---|---|
-| **Password hashing** | Argon2id — memory: 65536 KB, iterations: 3, parallelism: 4 |
-| **Session security** | HttpOnly + Secure + SameSite=Strict cookies; Redis-backed; DB-tracked for revocation |
-| **Rate limiting** | 10 auth attempts per 15 min; 200 API calls per min per IP |
-| **Brute-force protection** | Exponential backoff tracking in Redis |
-| **Virus scanning** | Every uploaded file is scanned via ClamAV INSTREAM protocol before activation |
-| **MIME validation** | `file-type` library reads file magic bytes — extension alone is not trusted |
-| **Blocked extensions** | Configurable list (`.exe`, `.bat`, `.sh`, etc.) rejected at upload time |
-| **Download URLs** | Time-limited pre-signed S3 URLs (5 min TTL) — raw storage keys never exposed |
-| **Upload isolation** | Files never executed on the server; stored → scanned → activated |
-| **Path traversal** | `sanitize-filename` applied to all user-provided file/folder names |
-| **Audit logging** | Every login, upload, share, admin action logged with user ID, IP, user agent |
-| **Email verification** | Required before accessing drive features |
-| **2FA** | Optional TOTP (Google Authenticator, Authy, etc.) with backup codes |
-| **Server-side encryption** | MinIO/S3 AES-256 SSE applied to all stored objects |
-| **Trust proxy** | Configured for correct client IP logging behind Cloudflare/Tailscale |
-
-### Recommended hardening for production
-
-1. **Change all default passwords** in `.env` before first start — especially `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `MINIO_ROOT_PASSWORD`
-2. **Use strong secrets** — `SESSION_SECRET` and `JWT_SECRET` must be 64+ random bytes
-3. **Expose no ports directly** — route all traffic through Cloudflare Tunnel or Tailscale
-4. **Set up SMTP** — without it, users cannot verify their email or reset passwords
-5. **Monitor ClamAV startup** — `docker compose logs clamav` — wait for "Listening daemon" before testing uploads
-6. **Back up your volumes** — `postgres_data`, `redis_data`, `minio_data` contain all your data
+| Password storage | Argon2id (65 536 KB memory, 3 iterations, 4 parallelism) |
+| Session cookies | HttpOnly, Secure (configurable), SameSite=Strict behind HTTPS |
+| File downloads | AWS v4 pre-signed URLs (5 min expiry), signed for the public hostname |
+| Virus scanning | ClamAV INSTREAM on every upload; infected files are quarantined |
+| MIME validation | Server-side MIME type check (not just extension) |
+| Rate limiting | Per-IP limits on auth (10/15 min), API (200/min), uploads (20/hr) |
+| CORS | Locked to `FRONTEND_URL` only |
+| Content Security Policy | Strict CSP via Helmet |
+| Trust proxy | `trust proxy: 1` for correct IP logging behind Tailscale/Cloudflare |
 
 ---
 
 ## Background Workers
 
-DataServer runs four background workers via [BullMQ](https://bullmq.io/):
+All heavy work runs asynchronously via BullMQ:
 
-### Preview Worker
-- **Trigger:** Immediately after a file is successfully uploaded
-- **Action:** Uses `sharp` to generate a 400px-wide WebP thumbnail for image files
-- **Result:** Thumbnail stored in MinIO at `thumbnails/<fileId>.webp`; file status set to `ACTIVE`
+| Worker | What it does |
+|---|---|
+| **Preview** | Generates WebP thumbnails for images after upload |
+| **Virus scan** | Streams file through ClamAV; quarantines infected files |
+| **Trash cleanup** | Permanently deletes files trashed > 30 days ago |
+| **Notifications** | Sends email + in-app notifications for shares, security events, storage warnings |
 
-### Virus Scan Worker
-- **Trigger:** Immediately after upload (alongside preview generation)
-- **Action:** Streams file from MinIO to ClamAV via the INSTREAM TCP protocol
-- **Result:** `isVirusScanned = true`; `virusScanResult = "CLEAN" | "INFECTED"`. Infected files are quarantined (status set to `DELETED`) and flagged for admin review
-
-### Trash Cleanup Worker
-- **Trigger:** Daily at 2:00 AM UTC (cron schedule)
-- **Action:** Finds all files trashed more than 30 days ago; deletes them from MinIO and the database; decrements the owner's used storage quota
-- **Also cleans up:** Expired password reset tokens and stale pending invitations
-
-### Notification Worker
-- **Trigger:** Any action that generates a notification (share, security event, storage warning)
-- **Action:** Sends email via your configured SMTP provider using branded HTML templates
-- **Types:** Email verification, password reset, folder share notification, storage warning (at 80% and 95% quota)
+Workers run inside the backend container alongside the API server.
 
 ---
 
-## API Reference
+## Local Development Setup
 
-All endpoints are prefixed with `/api`. Authentication is via session cookie (set on login).
+Use this when you want to make code changes and see them live.
 
-### Authentication
+### Step 1 — Start infrastructure
 
-```
-POST   /api/auth/register              Register with a platform invitation code
-POST   /api/auth/login                 Email + password login
-POST   /api/auth/logout                Destroy session
-GET    /api/auth/me                    Get current authenticated user
-GET    /api/auth/google                Initiate Google OAuth2 flow
-GET    /api/auth/google/callback       Google OAuth2 callback
-POST   /api/auth/google/complete-registration  Complete Google sign-up with invite code
-POST   /api/auth/verify-email          Verify email with token from email link
-POST   /api/auth/resend-verification   Resend verification email
-POST   /api/auth/forgot-password       Request password reset email
-POST   /api/auth/reset-password        Complete password reset with token
-POST   /api/auth/change-password       Change password (requires current password)
-GET    /api/auth/2fa/setup             Get TOTP secret and QR code
-POST   /api/auth/2fa/verify            Confirm TOTP code to enable 2FA (returns backup codes)
-POST   /api/auth/2fa/disable           Disable 2FA (requires current TOTP code)
+```bash
+sudo docker compose up -d postgres redis minio clamav
 ```
 
-### Files
+### Step 2 — Backend
 
-```
-GET    /api/files                      List files (query: search, folderId, sort, page)
-GET    /api/files/recent               Files accessed/modified in last 7 days
-GET    /api/files/starred              Starred files
-GET    /api/files/trash                Trashed files
-POST   /api/files/upload               Upload one or more files (multipart/form-data)
-POST   /api/files/empty-trash          Permanently delete all trashed files
-GET    /api/files/:id                  Get file metadata
-GET    /api/files/:id/download         Get signed download URL
-GET    /api/files/:id/preview          Get signed preview URL
-GET    /api/files/:id/versions         List previous versions
-PATCH  /api/files/:id                  Rename file
-PUT    /api/files/:id/move             Move file to different folder
-POST   /api/files/:id/trash            Move to trash
-POST   /api/files/:id/restore          Restore from trash
-DELETE /api/files/:id                  Permanently delete
-POST   /api/files/:id/star             Toggle star
-POST   /api/files/:id/flag             Report file to admins
+```bash
+cd backend
+npm install
+cp ../.env.example ../.env
+# Edit .env — at minimum set DATABASE_URL, REDIS_URL, S3_* vars
+
+npx prisma db push        # create tables
+npx tsx src/seed.ts       # create admin user
+npm run dev               # http://localhost:4000
 ```
 
-### Folders
+### Step 3 — Frontend
 
-```
-GET    /api/folders                    List folders (query: parentId, search, starred)
-GET    /api/folders/starred            Starred folders
-POST   /api/folders                    Create folder
-GET    /api/folders/:id                Get folder metadata
-GET    /api/folders/:id/contents       List folder contents (files + subfolders)
-PATCH  /api/folders/:id                Rename folder
-PUT    /api/folders/:id/move           Move folder
-POST   /api/folders/:id/trash          Move to trash
-POST   /api/folders/:id/restore        Restore from trash
-POST   /api/folders/:id/star           Toggle star
-GET    /api/folders/:id/share-info     Get current shares for folder
-POST   /api/folders/:id/share          Add a user to folder (by email + permission)
-PATCH  /api/folders/:id/share/:shareId Update a share's permission
-DELETE /api/folders/:id/share/:shareId Revoke a share
-PATCH  /api/folders/:id/shareable      Toggle whether folder can have share invitations
+```bash
+cd frontend
+npm install
+npm run dev               # http://localhost:5173
 ```
 
-### Sharing
-
-```
-GET    /api/shared/with-me             Folders others have shared with me
-GET    /api/shared/by-me               Folders I have shared with others
-GET    /api/shared/folder/:id/contents Browse shared folder contents
-```
-
-### Invitations
-
-```
-GET    /api/invitations                List my created folder-share invitations
-POST   /api/invitations                Create a folder-share invitation (owner only)
-POST   /api/invitations/validate       Validate a code without consuming it
-POST   /api/invitations/accept         Accept a folder-share invitation
-DELETE /api/invitations/:id            Revoke an invitation I created
-```
-
-### Account
-
-```
-GET    /api/account/profile            Get profile (email, displayName, avatarUrl, etc.)
-PATCH  /api/account/profile            Update display name / avatar URL
-GET    /api/account/storage            Storage usage stats
-GET    /api/account/sessions           Active sessions list
-DELETE /api/account/sessions           Revoke all sessions except current
-DELETE /api/account/sessions/:id       Revoke a specific session
-GET    /api/account/security-events    Recent security audit events (logins, 2FA, etc.)
-DELETE /api/account                    Delete account permanently
-```
-
-### Notifications
-
-```
-GET    /api/notifications              Get notifications (paginated)
-PATCH  /api/notifications/:id/read     Mark notification as read
-PATCH  /api/notifications/read-all     Mark all as read
-```
-
-### Admin (requires ADMIN role)
-
-```
-GET    /api/admin/users                List all users (search, filter by status/role)
-PATCH  /api/admin/users/:id            Manage user: suspend | restore | delete | setQuota | setRole
-GET    /api/admin/invitations          List all invitations (all types, all users)
-POST   /api/admin/invitations          Create a platform invitation
-DELETE /api/admin/invitations/:id      Revoke any invitation
-GET    /api/admin/audit-logs           Browse audit log (filter by user, action, date)
-GET    /api/admin/storage-stats        Platform-wide storage statistics
-POST   /api/admin/storage-stats/recalculate  Recalculate all user storage totals
-GET    /api/admin/flags                List content flags (filter by status)
-PATCH  /api/admin/flags/:id            Review a flag (dismiss / quarantine)
-GET    /api/admin/policy               Get platform policy
-PATCH  /api/admin/policy               Update platform policy
-```
+The Vite dev server proxies `/api/*` to `http://localhost:4000` automatically.
 
 ---
 
-## Project Structure
+## Updating
 
-```
-DataServer/
-├── docker-compose.yml          # Orchestrates all services
-├── .env.example                # Template for all environment variables
-├── .gitignore
-├── README.md
-│
-├── backend/
-│   ├── Dockerfile              # Multi-stage production image
-│   ├── package.json
-│   ├── tsconfig.json
-│   ├── prisma/
-│   │   └── schema.prisma       # Full database schema
-│   └── src/
-│       ├── index.ts            # Entrypoint — starts server + workers
-│       ├── app.ts              # Express app factory
-│       ├── config.ts           # Centralised config with validation
-│       ├── seed.ts             # Admin bootstrap script
-│       ├── lib/
-│       │   ├── prisma.ts       # Prisma client singleton
-│       │   ├── redis.ts        # ioredis singleton
-│       │   ├── s3.ts           # MinIO/S3 client + helper functions
-│       │   ├── mailer.ts       # Nodemailer + HTML email templates
-│       │   └── logger.ts       # Winston logger with daily rotation
-│       ├── middleware/
-│       │   ├── auth.ts         # Passport strategies, requireAuth guards
-│       │   ├── rateLimiter.ts  # express-rate-limit configuration
-│       │   └── upload.ts       # Multer config + file validation
-│       ├── services/
-│       │   ├── auditService.ts         # Audit log helpers
-│       │   ├── invitationService.ts    # Code generation + validation
-│       │   ├── sharingService.ts       # Permission checking + inheritance
-│       │   ├── quotaService.ts         # Storage quota enforcement
-│       │   └── notificationService.ts  # In-app notification creation
-│       ├── routes/
-│       │   ├── auth.ts         # All auth endpoints
-│       │   ├── files.ts        # File CRUD + upload
-│       │   ├── folders.ts      # Folder CRUD + sharing
-│       │   ├── shared.ts       # Shared-with-me / shared-by-me
-│       │   ├── invitations.ts  # Invitation management
-│       │   ├── account.ts      # Profile, sessions, security events
-│       │   ├── notifications.ts
-│       │   └── admin.ts        # Admin-only routes
-│       └── workers/
-│           ├── index.ts             # startWorkers() / stopWorkers()
-│           ├── queues.ts            # BullMQ Queue instances
-│           ├── previewWorker.ts     # Sharp thumbnail generation
-│           ├── virusScanWorker.ts   # ClamAV INSTREAM scanning
-│           ├── trashCleanupWorker.ts # 30-day purge + token cleanup
-│           ├── notificationWorker.ts # Email dispatch
-│           └── scheduledJobs.ts     # Cron job registration
-│
-├── frontend/
-│   ├── Dockerfile              # Build (Vite) + serve (nginx) stages
-│   ├── nginx.conf              # SPA routing + caching + security headers
-│   ├── package.json
-│   ├── vite.config.ts          # Dev proxy to backend, production chunks
-│   ├── tailwind.config.js
-│   ├── tsconfig.json
-│   └── src/
-│       ├── main.tsx            # React entrypoint + providers
-│       ├── App.tsx             # Router + auth guards
-│       ├── types/index.ts      # All TypeScript types and interfaces
-│       ├── lib/
-│       │   └── axios.ts        # Axios instance + error helper
-│       ├── store/
-│       │   ├── authStore.ts    # Zustand auth state
-│       │   └── uploadStore.ts  # Zustand upload progress state
-│       ├── hooks/
-│       │   ├── useAuth.ts      # All auth mutations
-│       │   ├── useFiles.ts     # File queries + mutations
-│       │   └── useFolders.ts   # Folder queries + mutations + sharing
-│       ├── components/
-│       │   ├── common/         # LoadingSpinner, EmptyState, StorageBar, etc.
-│       │   ├── files/          # FileGrid, FileList, FilePreviewModal, UploadDropzone
-│       │   ├── folders/        # FolderBreadcrumb, CreateFolderModal
-│       │   ├── sharing/        # ShareModal
-│       │   └── layout/         # DriveLayout, AdminLayout
-│       └── pages/
-│           ├── auth/           # Login, Register, VerifyEmail, ForgotPw, ResetPw, AcceptInvite
-│           ├── drive/          # MyDrive, Folder, SharedWith/By, Recent, Starred, Trash, Settings, Security
-│           └── admin/          # Users, Invitations, Audit, Storage, Flags, Policy
-│
-└── tailscale/
-    └── serve.json              # Tailscale Serve config (optional)
+```bash
+cd /opt/dataserver        # or wherever you installed it
+git pull
+sudo docker compose build --no-cache backend frontend
+sudo docker compose up -d
 ```
 
----
+> Always run `git pull` **before** rebuilding — Docker caches build layers and won't pick up changes otherwise.
 
-## Direct Host Port Access
-
-By default the frontend container uses `expose: "80"` rather than a host port binding. This avoids conflicts with other web services already running on the host (Mainsail, Nginx, Caddy, Home Assistant, etc.).
-
-Traffic reaches the frontend through Cloudflare Tunnel or Tailscale, which connect to `frontend:80` inside Docker's internal network — no host port needed.
-
-**If you also want direct LAN/localhost access**, edit `docker-compose.yml` and change:
-
-```yaml
-# Default — internal only (no host port conflict)
-frontend:
-  expose:
-    - "80"
-
-# Change to this for direct access on port 8080
-frontend:
-  ports:
-    - "8080:80"
+If there are database schema changes:
+```bash
+sudo docker compose exec backend npx prisma db push
 ```
-
-Then access the app at `http://your-server-ip:8080`. Pick any free port — `8080`, `8888`, `3000`, etc.
-
-> If port 80 is free on your system (no Mainsail or other web server), you can use `"80:80"` directly.
 
 ---
 
 ## Troubleshooting
 
-### Port 80 already in use
+### Login returns 401 immediately after succeeding
 
-If you see `address already in use` for port 80, another service (Mainsail, Nginx, Apache, etc.) is already bound to it. The default config uses `expose` (no host binding) to avoid this. If you added a `ports:` mapping, either remove it and use a tunnel, or change it to a free port like `8080:80`.
+Session cookie not being saved. Check:
+- `COOKIE_SECURE=true` requires HTTPS — if you're on plain HTTP, set it to `false`
+- `FRONTEND_URL` must match the URL you're accessing the app from (exact origin, no trailing slash)
+- nginx must send `X-Forwarded-Proto: https` to the backend (already configured if using this repo's `nginx.conf`)
 
-### ClamAV takes a long time to start
+### File preview/download returns 404 or SignatureDoesNotMatch
 
-This is normal on first run. ClamAV needs to download virus definition files (~300 MB). Check progress:
+- `S3_PUBLIC_URL` must be the URL browsers use (your app URL, not `minio:9000`)
+- The presigned URL is signed for `S3_PUBLIC_URL` — if this changes you need to restart the backend
+- After changing `S3_PUBLIC_URL`, restart backend: `sudo docker compose restart backend`
 
-```bash
-docker compose logs -f clamav
-# Wait until you see: "Listening daemon: PID: ..."
+### 413 Request Entity Too Large on upload
+
+nginx's upload limit. In `frontend/nginx.conf`, increase `client_max_body_size`:
+
+```nginx
+client_max_body_size 2g;   # already set in this repo
 ```
 
-Uploaded files will queue for scanning and won't become available until ClamAV is ready.
+Rebuild frontend after changing: `sudo docker compose build --no-cache frontend && sudo docker compose up -d frontend`
 
-### Emails are not being sent
+### Tailscale: "unable to connect"
 
-1. Check SMTP settings in `.env` are correct
-2. Check backend logs: `docker compose logs backend`
-3. If using Gmail, ensure you're using an **App Password**, not your regular Gmail password
-4. Confirm `FRONTEND_URL` is set correctly (it's used to build links in emails)
+1. Check container is running: `sudo docker logs dataserver_tailscale --tail 30`
+2. Check Funnel is active: `sudo docker exec dataserver_tailscale tailscale --socket=/tmp/tailscaled.sock funnel status`
+3. Ensure HTTPS certs are enabled in Tailscale DNS settings
+4. Ensure `funnel` attr is in your ACL policy
+5. The hostname in `tailscale/serve.json` must match what `tailscale cert` accepts — run:
+   ```bash
+   sudo docker exec dataserver_tailscale tailscale --socket=/tmp/tailscaled.sock cert YOUR-HOSTNAME
+   ```
+   The error message will tell you the valid hostname.
 
-### "Invalid invitation code" on registration
+### Tailscale auth key error: "requested tags are invalid"
 
-- Codes are case-sensitive — use the exact code printed by the seed script
-- Codes expire after their set date, or after reaching max uses
-- Platform codes can only be used for account creation, not for folder access
+Remove `TS_EXTRA_ARGS: --advertise-tags=tag:server` from docker-compose.yml (requires tags to be defined in ACL first). Generate a new auth key after removing it.
 
-### Database migration errors
+### MinIO presigned URLs use wrong hostname
 
+Set `S3_PUBLIC_URL` in `.env` to your public app URL, then restart backend:
 ```bash
-# Reset the database completely (WARNING: destroys all data)
-docker compose down -v
-docker compose up -d postgres
-docker compose exec backend npx prisma migrate deploy
-docker compose exec backend npm run seed
+sudo docker compose restart backend
 ```
 
-### Can't connect to MinIO
+### Docker build uses cached (old) code
 
-Check MinIO is healthy:
-
+Always `git pull` before building:
 ```bash
-docker compose ps minio
-docker compose logs minio
+git pull && sudo docker compose build --no-cache <service> && sudo docker compose up -d <service>
 ```
 
-Verify `S3_ACCESS_KEY` and `S3_SECRET_KEY` in `.env` match `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD`.
+### Services won't start — port already in use
 
-### Sessions lost after restart
-
-Sessions are stored in Redis. If Redis loses its data (no volume mounted, or data purged), all users are logged out. The `redis_data` volume in docker-compose.yml persists sessions across restarts.
-
-### "upstream sent invalid header" from nginx
-
-The backend is not running or not healthy. Check:
-
-```bash
-docker compose logs backend
-docker compose ps
+Change the port mapping in `docker-compose.yml`:
+```yaml
+ports:
+  - "3005:80"   # change 3005 to any free port
 ```
 
-### Storage usage showing incorrectly
-
-Recalculate from the Admin Panel → Storage → "Recalculate storage", or via API:
-
-```bash
-curl -X POST http://localhost:4000/api/admin/storage-stats/recalculate \
-  -H "Cookie: ds.sid=your_session_cookie"
-```
-
----
-
-## License
-
-Private — All rights reserved.
+Check what's using a port: `sudo ss -tlnp | grep :3005`
