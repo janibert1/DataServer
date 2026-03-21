@@ -1,0 +1,412 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────
+
+enum UserRole {
+  ADMIN
+  USER
+}
+
+enum UserStatus {
+  PENDING_VERIFICATION
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum AuthProvider {
+  LOCAL
+  GOOGLE
+}
+
+enum InvitationType {
+  PLATFORM
+  FOLDER_SHARE
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
+enum SharePermission {
+  VIEWER
+  DOWNLOADER
+  CONTRIBUTOR
+  EDITOR
+  OWNER
+}
+
+enum FileStatus {
+  UPLOADING
+  PROCESSING
+  ACTIVE
+  TRASHED
+  DELETED
+}
+
+enum NotificationType {
+  FOLDER_SHARED
+  INVITATION_ACCEPTED
+  ACCESS_REVOKED
+  STORAGE_NEARLY_FULL
+  SUSPICIOUS_LOGIN
+  SECURITY_CHANGE
+  FILE_FLAGGED
+}
+
+enum AuditAction {
+  USER_REGISTERED
+  USER_LOGIN
+  USER_LOGIN_FAILED
+  USER_LOGOUT
+  USER_DELETED
+  USER_SUSPENDED
+  USER_RESTORED
+  PASSWORD_CHANGED
+  PASSWORD_RESET_REQUESTED
+  EMAIL_VERIFIED
+  TWO_FACTOR_ENABLED
+  TWO_FACTOR_DISABLED
+  INVITATION_CREATED
+  INVITATION_ACCEPTED
+  INVITATION_REVOKED
+  FILE_UPLOADED
+  FILE_DOWNLOADED
+  FILE_DELETED
+  FILE_RESTORED
+  FILE_PERMANENTLY_DELETED
+  FILE_MOVED
+  FILE_RENAMED
+  FILE_SHARED
+  FILE_UNSHARED
+  FOLDER_CREATED
+  FOLDER_DELETED
+  FOLDER_RENAMED
+  FOLDER_MOVED
+  FOLDER_SHARED
+  FOLDER_UNSHARED
+  PERMISSION_CHANGED
+  QUOTA_CHANGED
+  ADMIN_ACTION
+  VIRUS_DETECTED
+  FILE_FLAGGED
+}
+
+// ─── Models ───────────────────────────────────────────────────
+
+model User {
+  id                   String     @id @default(cuid())
+  email                String     @unique
+  emailVerified        Boolean    @default(false)
+  emailVerifyToken     String?    @unique
+  emailVerifyExpiry    DateTime?
+  passwordHash         String?
+  role                 UserRole   @default(USER)
+  status               UserStatus @default(PENDING_VERIFICATION)
+  authProvider         AuthProvider @default(LOCAL)
+  googleId             String?    @unique
+  displayName          String
+  avatarUrl            String?
+  storageQuotaBytes    BigInt     @default(10737418240)
+  storageUsedBytes     BigInt     @default(0)
+  twoFactorEnabled     Boolean    @default(false)
+  twoFactorSecret      String?
+  twoFactorBackupCodes String[]   @default([])
+  lastLoginAt          DateTime?
+  lastLoginIp          String?
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
+  deletedAt            DateTime?
+
+  sessions           Session[]
+  passwordResets     PasswordReset[]
+  files              File[]
+  folders            Folder[]
+  ownedShares        FolderShare[]  @relation("ShareOwner")
+  receivedShares     FolderShare[]  @relation("ShareRecipient")
+  createdInvitations Invitation[]   @relation("InvitationCreator")
+  usedInvitation     Invitation?    @relation("InvitationUser", fields: [usedInvitationId], references: [id])
+  usedInvitationId   String?
+  auditLogs          AuditLog[]
+  notifications      Notification[]
+  sentNotifications  Notification[] @relation("NotificationSender")
+  flaggedContent     ContentFlag[]  @relation("FlagReporter")
+  reviewedFlags      ContentFlag[]  @relation("FlagReviewer")
+  starredItems       StarredItem[]
+
+  @@index([email])
+  @@index([googleId])
+  @@index([status])
+}
+
+model Session {
+  id        String   @id
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  data      String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  ipAddress String?
+  userAgent String?
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model PasswordReset {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([token])
+  @@index([userId])
+}
+
+model Invitation {
+  id               String           @id @default(cuid())
+  code             String           @unique
+  type             InvitationType
+  status           InvitationStatus @default(PENDING)
+  creatorId        String
+  creator          User             @relation("InvitationCreator", fields: [creatorId], references: [id])
+  usedByUsers      User[]           @relation("InvitationUser")
+  maxUses          Int              @default(1)
+  useCount         Int              @default(0)
+  expiresAt        DateTime?
+  revokedAt        DateTime?
+  revokedReason    String?
+  targetFolderId   String?
+  targetFolder     Folder?          @relation(fields: [targetFolderId], references: [id])
+  targetPermission SharePermission? @default(VIEWER)
+  email            String?
+  note             String?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  @@index([code])
+  @@index([creatorId])
+  @@index([type])
+  @@index([status])
+}
+
+model Folder {
+  id          String    @id @default(cuid())
+  name        String
+  ownerId     String
+  owner       User      @relation(fields: [ownerId], references: [id])
+  parentId    String?
+  parent      Folder?   @relation("FolderTree", fields: [parentId], references: [id])
+  children    Folder[]  @relation("FolderTree")
+  files       File[]
+  isShared    Boolean   @default(false)
+  isTrashed   Boolean   @default(false)
+  trashedAt   DateTime?
+  color       String?
+  description String?
+  path        String
+  depth       Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  shares      FolderShare[]
+  invitations Invitation[]
+  starredBy   StarredItem[]
+  flags       ContentFlag[]
+
+  @@index([ownerId])
+  @@index([parentId])
+  @@index([path])
+  @@index([isTrashed])
+}
+
+model File {
+  id              String     @id @default(cuid())
+  name            String
+  originalName    String
+  mimeType        String
+  size            BigInt
+  storageKey      String     @unique
+  thumbnailKey    String?
+  previewKey      String?
+  checksum        String
+  status          FileStatus @default(UPLOADING)
+  ownerId         String
+  owner           User       @relation(fields: [ownerId], references: [id])
+  folderId        String?
+  folder          Folder?    @relation(fields: [folderId], references: [id])
+  isTrashed       Boolean    @default(false)
+  trashedAt       DateTime?
+  isVirusScanned  Boolean    @default(false)
+  virusScanResult String?
+  isFlagged       Boolean    @default(false)
+  description     String?
+  tags            String[]   @default([])
+  path            String
+  downloadCount   Int        @default(0)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  deletedAt       DateTime?
+
+  versions       FileVersion[]
+  starredBy      StarredItem[]
+  flags          ContentFlag[]
+  downloadTokens DownloadToken[]
+
+  @@index([ownerId])
+  @@index([folderId])
+  @@index([status])
+  @@index([isTrashed])
+  @@index([mimeType])
+  @@index([name])
+}
+
+model FileVersion {
+  id          String    @id @default(cuid())
+  fileId      String
+  file        File      @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  version     Int
+  storageKey  String
+  size        BigInt
+  checksum    String
+  mimeType    String
+  createdById String
+  createdAt   DateTime  @default(now())
+  deletedAt   DateTime?
+
+  @@index([fileId])
+  @@unique([fileId, version])
+}
+
+model FolderShare {
+  id             String          @id @default(cuid())
+  folderId       String
+  folder         Folder          @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  ownerId        String
+  owner          User            @relation("ShareOwner", fields: [ownerId], references: [id])
+  recipientId    String?
+  recipient      User?           @relation("ShareRecipient", fields: [recipientId], references: [id])
+  recipientEmail String?
+  permission     SharePermission
+  canReshare     Boolean         @default(false)
+  invitationId   String?
+  revokedAt      DateTime?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@unique([folderId, recipientId])
+  @@index([folderId])
+  @@index([ownerId])
+  @@index([recipientId])
+}
+
+model DownloadToken {
+  id        String    @id @default(cuid())
+  fileId    String
+  file      File      @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  token     String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([token])
+  @@index([fileId])
+}
+
+model AuditLog {
+  id         String      @id @default(cuid())
+  userId     String?
+  user       User?       @relation(fields: [userId], references: [id])
+  action     AuditAction
+  entityType String?
+  entityId   String?
+  details    Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime    @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@index([entityType, entityId])
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  senderId  String?
+  sender    User?            @relation("NotificationSender", fields: [senderId], references: [id])
+  type      NotificationType
+  title     String
+  body      String
+  link      String?
+  isRead    Boolean          @default(false)
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
+}
+
+model StarredItem {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fileId    String?
+  file      File?    @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  folderId  String?
+  folder    Folder?  @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, fileId])
+  @@unique([userId, folderId])
+  @@index([userId])
+}
+
+model ContentFlag {
+  id            String    @id @default(cuid())
+  reporterId    String
+  reporter      User      @relation("FlagReporter", fields: [reporterId], references: [id])
+  fileId        String?
+  file          File?     @relation(fields: [fileId], references: [id])
+  folderId      String?
+  folder        Folder?   @relation(fields: [folderId], references: [id])
+  reason        String
+  details       String?
+  status        String    @default("PENDING")
+  reviewedById  String?
+  reviewer      User?     @relation("FlagReviewer", fields: [reviewedById], references: [id])
+  reviewedAt    DateTime?
+  reviewNote    String?
+  createdAt     DateTime  @default(now())
+
+  @@index([reporterId])
+  @@index([status])
+}
+
+model StoragePolicy {
+  id                   String   @id @default(cuid())
+  defaultQuotaBytes    BigInt   @default(10737418240)
+  maxFileSizeBytes     BigInt   @default(2147483648)
+  allowedMimeTypes     String[] @default([])
+  blockedExtensions    String[] @default([".exe", ".bat", ".sh", ".ps1", ".msi", ".dll", ".so", ".cmd", ".vbs", ".jar"])
+  trashRetentionDays   Int      @default(30)
+  versionRetentionCount Int     @default(10)
+  updatedAt            DateTime @updatedAt
+}
