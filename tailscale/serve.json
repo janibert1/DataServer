@@ -12,5 +12,8 @@
         }
       }
     }
+  },
+  "AllowFunnel": {
+    "klipperender3-1.taile6efac.ts.net:443": true
   }
 }
