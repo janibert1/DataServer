@@ -28,6 +28,7 @@ A production-ready, **invitation-only** cloud storage platform built with securi
 - [Background Workers](#background-workers)
 - [API Reference](#api-reference)
 - [Project Structure](#project-structure)
+- [Direct Host Port Access](#direct-host-port-access)
 - [Troubleshooting](#troubleshooting)
 
 ---
@@ -155,7 +156,9 @@ This starts:
 - MinIO (object storage)
 - ClamAV (virus scanner — takes 2–3 minutes to download virus definitions on first start)
 - Express backend on port 4000
-- React frontend on port 80
+- React frontend (internal Docker network only — accessed via tunnel or port mapping)
+
+> **Note:** The frontend does **not** bind to port 80 on the host by default, to avoid conflicts with other web services (Nginx, Mainsail, Caddy, etc.) that may already be running. Access is intended via Cloudflare Tunnel or Tailscale. If you want direct LAN access, see [Direct Host Port Access](#direct-host-port-access).
 
 ### Step 4 — Run database migrations
 
@@ -474,15 +477,11 @@ docker compose up -d --build
 
 The `cloudflared` container in docker-compose.yml will connect automatically. Your app is live at `https://drive.yourdomain.com` with automatic HTTPS.
 
-**7. Lock down direct port access (recommended):**
+**7. Port binding:**
 
-Edit `docker-compose.yml` — change the frontend `ports:` to `expose:` so nothing is reachable except through the tunnel:
+The frontend uses `expose: "80"` by default (internal Docker network only), so the tunnel connects to it via `frontend:80` without binding any host port. This means no conflict with other services like Mainsail, Nginx, or Caddy already running on port 80.
 
-```yaml
-frontend:
-  expose:
-    - "80"   # was: ports: ["80:80"]
-```
+If you also want direct LAN access alongside the tunnel, see [Direct Host Port Access](#direct-host-port-access) below.
 
 ---
 
@@ -498,13 +497,9 @@ curl -fsSL https://tailscale.com/install.sh | sh
 sudo tailscale up
 ```
 
-Your server gets a stable Tailscale IP and hostname (e.g. `my-server.tail1234.ts.net`). Any device on your Tailnet can reach the app at:
+Your server gets a stable Tailscale IP and hostname (e.g. `my-server.tail1234.ts.net`).
 
-```
-http://my-server.tail1234.ts.net     # port 80 (frontend)
-```
-
-No other config needed.
+By default the frontend does not bind a host port, so you'll need either the Docker sidecar (Option B) or to temporarily map a port for direct access. See [Direct Host Port Access](#direct-host-port-access) if you want to reach it without a sidecar.
 
 #### Option B — Docker sidecar (already in docker-compose.yml)
 
@@ -817,7 +812,37 @@ DataServer/
 
 ---
 
+## Direct Host Port Access
+
+By default the frontend container uses `expose: "80"` rather than a host port binding. This avoids conflicts with other web services already running on the host (Mainsail, Nginx, Caddy, Home Assistant, etc.).
+
+Traffic reaches the frontend through Cloudflare Tunnel or Tailscale, which connect to `frontend:80` inside Docker's internal network — no host port needed.
+
+**If you also want direct LAN/localhost access**, edit `docker-compose.yml` and change:
+
+```yaml
+# Default — internal only (no host port conflict)
+frontend:
+  expose:
+    - "80"
+
+# Change to this for direct access on port 8080
+frontend:
+  ports:
+    - "8080:80"
+```
+
+Then access the app at `http://your-server-ip:8080`. Pick any free port — `8080`, `8888`, `3000`, etc.
+
+> If port 80 is free on your system (no Mainsail or other web server), you can use `"80:80"` directly.
+
+---
+
 ## Troubleshooting
+
+### Port 80 already in use
+
+If you see `address already in use` for port 80, another service (Mainsail, Nginx, Apache, etc.) is already bound to it. The default config uses `expose` (no host binding) to avoid this. If you added a `ports:` mapping, either remove it and use a tunnel, or change it to a free port like `8080:80`.
 
 ### ClamAV takes a long time to start
 
