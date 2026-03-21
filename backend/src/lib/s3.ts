@@ -22,6 +22,18 @@ export const s3Client = new S3Client({
   forcePathStyle: config.s3.forcePathStyle,
 });
 
+// Separate client used only for generating pre-signed URLs.
+// Uses the public-facing endpoint so the signed host matches what the browser sends.
+const s3PresignClient = new S3Client({
+  endpoint: config.s3.publicUrl || config.s3.endpoint,
+  region: config.s3.region,
+  credentials: {
+    accessKeyId: config.s3.accessKey,
+    secretAccessKey: config.s3.secretKey,
+  },
+  forcePathStyle: config.s3.forcePathStyle,
+});
+
 export async function ensureBucketExists(): Promise<void> {
   try {
     await s3Client.send(new HeadBucketCommand({ Bucket: config.s3.bucket }));
@@ -53,27 +65,12 @@ export async function uploadToS3(
   );
 }
 
-function rewriteToPublicUrl(signedUrl: string): string {
-  if (!config.s3.publicUrl) return signedUrl;
-  try {
-    const parsed = new URL(signedUrl);
-    const publicParsed = new URL(config.s3.publicUrl);
-    parsed.hostname = publicParsed.hostname;
-    parsed.port = publicParsed.port;
-    parsed.protocol = publicParsed.protocol;
-    return parsed.toString();
-  } catch {
-    return signedUrl;
-  }
-}
-
 export async function getSignedDownloadUrl(key: string, expiresInSeconds = 300): Promise<string> {
   const command = new GetObjectCommand({
     Bucket: config.s3.bucket,
     Key: key,
   });
-  const url = await getSignedUrl(s3Client, command, { expiresIn: expiresInSeconds });
-  return rewriteToPublicUrl(url);
+  return getSignedUrl(s3PresignClient, command, { expiresIn: expiresInSeconds });
 }
 
 export async function getSignedUploadUrl(
@@ -86,8 +83,7 @@ export async function getSignedUploadUrl(
     Key: key,
     ContentType: contentType,
   });
-  const url = await getSignedUrl(s3Client, command, { expiresIn: expiresInSeconds });
-  return rewriteToPublicUrl(url);
+  return getSignedUrl(s3PresignClient, command, { expiresIn: expiresInSeconds });
 }
 
 export async function deleteFromS3(key: string): Promise<void> {
