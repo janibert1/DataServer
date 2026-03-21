@@ -4,7 +4,6 @@ import { config } from '../config';
 import { prisma } from '../lib/prisma';
 import { getObjectStream } from '../lib/s3';
 import { logger } from '../lib/logger';
-import { config } from '../config';
 import { Readable } from 'stream';
 
 export interface VirusScanJobData {
