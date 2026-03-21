@@ -24,6 +24,7 @@ export const config = {
   isDev: optional('NODE_ENV', 'development') !== 'production',
 
   frontendUrl: optional('FRONTEND_URL', 'http://localhost:5173'),
+  cookieSecure: optional('COOKIE_SECURE', '') === 'true',
 
   database: {
     url: required('DATABASE_URL'),

@@ -82,8 +82,8 @@ export function createApp() {
       name: 'ds.sid',
       cookie: {
         httpOnly: true,
-        secure: !config.isDev,
-        sameSite: config.isDev ? 'lax' : 'strict',
+        secure: config.cookieSecure,
+        sameSite: config.cookieSecure ? 'strict' : 'lax',
         maxAge: config.session.maxAgeMs,
       },
     })
