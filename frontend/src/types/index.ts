@@ -72,6 +72,7 @@ export interface DriveFolder {
   id: string;
   name: string;
   parentId: string | null;
+  ownerId: string;
   path: string;
   depth: number;
   isShared: boolean;

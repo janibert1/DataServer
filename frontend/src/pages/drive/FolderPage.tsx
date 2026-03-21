@@ -59,7 +59,7 @@ export function FolderPage() {
       let currentId: string | null = folderId!;
       while (currentId) {
         try {
-          const res = await api.get(`/folders/${currentId}`);
+          const res: { data: { folder: { id: string; name: string; parentId: string | null } } } = await api.get(`/folders/${currentId}`);
           const folder = res.data.folder;
           crumbs.unshift({ id: folder.id, name: folder.name });
           currentId = folder.parentId;

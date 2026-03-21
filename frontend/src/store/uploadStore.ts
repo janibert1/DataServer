@@ -1,6 +1,5 @@
 import { create } from 'zustand';
 import { UploadItem } from '../types';
-import { v4 as uuidv4 } from 'uuid';
 
 // Simple UUID polyfill for frontend
 function generateId() {
