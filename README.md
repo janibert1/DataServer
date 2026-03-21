@@ -169,7 +169,7 @@ docker compose exec backend npx prisma migrate deploy
 ### Step 5 — Seed the database (creates admin + first invite code)
 
 ```bash
-docker compose exec backend npm run seed
+docker compose exec backend npm run seed:prod
 ```
 
 The seed script prints:
