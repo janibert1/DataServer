@@ -5,7 +5,7 @@
     }
   },
   "Web": {
-    "${TS_CERT_DOMAIN}:443": {
+    "klipperender3-1.taile6efac.ts.net:443": {
       "Handlers": {
         "/": {
           "Proxy": "http://frontend:80"
