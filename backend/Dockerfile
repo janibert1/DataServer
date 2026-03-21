@@ -4,11 +4,11 @@ RUN apk add --no-cache python3 make g++ curl
 
 FROM base AS deps
 COPY package*.json ./
-RUN npm ci --only=production
+RUN npm install --only=production
 
 FROM base AS dev-deps
 COPY package*.json ./
-RUN npm ci
+RUN npm install
 
 FROM dev-deps AS builder
 COPY . .
