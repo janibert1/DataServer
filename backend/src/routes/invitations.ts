@@ -13,6 +13,33 @@ import { getEffectivePermission } from '../services/sharingService';
 import { AuditAction, InvitationType, SharePermission } from '@prisma/client';
 
 export const invitationsRouter = Router();
+
+// ─── Validate code (public — needed for registration before login) ──
+
+invitationsRouter.post(
+  '/validate',
+  invitationValidateRateLimiter,
+  [body('code').trim().notEmpty()],
+  async (req: Request, res: Response) => {
+    const { code, type } = req.body;
+    const result = await validateInvitationCode(code, type);
+
+    if (!result.valid) {
+      res.status(400).json({ error: result.error });
+      return;
+    }
+
+    const inv = result.invitation;
+    res.json({
+      valid: true,
+      type: inv.type,
+      folder: inv.targetFolder ? { id: inv.targetFolder.id, name: inv.targetFolder.name } : null,
+      permission: inv.targetPermission,
+      note: inv.note,
+    });
+  }
+);
+
 invitationsRouter.use(requireAuth, requireVerifiedEmail);
 
 // ─── Create folder-share invitation (non-admin users) ────────
@@ -122,32 +149,6 @@ invitationsRouter.delete('/:id', async (req: Request, res: Response) => {
     res.status(400).json({ error: err.message });
   }
 });
-
-// ─── Validate code (no consumption) ─────────────────────────
-
-invitationsRouter.post(
-  '/validate',
-  invitationValidateRateLimiter,
-  [body('code').trim().notEmpty()],
-  async (req: Request, res: Response) => {
-    const { code, type } = req.body;
-    const result = await validateInvitationCode(code, type);
-
-    if (!result.valid) {
-      res.status(400).json({ error: result.error });
-      return;
-    }
-
-    const inv = result.invitation;
-    res.json({
-      valid: true,
-      type: inv.type,
-      folder: inv.targetFolder ? { id: inv.targetFolder.id, name: inv.targetFolder.name } : null,
-      permission: inv.targetPermission,
-      note: inv.note,
-    });
-  }
-);
 
 // ─── Accept folder-share invitation ─────────────────────────
 
