@@ -113,7 +113,6 @@ services:
     hostname: dataserver
     environment:
       TS_AUTHKEY: ${TAILSCALE_AUTHKEY}
-      TS_EXTRA_ARGS: --advertise-tags=tag:server
       TS_SERVE_CONFIG: /config/serve.json
       TS_STATE_DIR: /var/lib/tailscale
     volumes:
