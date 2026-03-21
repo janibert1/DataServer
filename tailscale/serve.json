@@ -5,7 +5,7 @@
     }
   },
   "Web": {
-    "klipperender3-1.taile6efac.ts.net:443": {
+    "dataserver.taile6efac.ts.net:443": {
       "Handlers": {
         "/": {
           "Proxy": "http://frontend:80"
@@ -14,6 +14,6 @@
     }
   },
   "AllowFunnel": {
-    "klipperender3-1.taile6efac.ts.net:443": true
+    "dataserver.taile6efac.ts.net:443": true
   }
 }
