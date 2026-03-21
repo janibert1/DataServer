@@ -49,7 +49,6 @@ export async function uploadToS3(
       Body: body,
       ContentType: contentType,
       Metadata: metadata,
-      ServerSideEncryption: 'AES256',
     })
   );
 }
