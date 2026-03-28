@@ -232,7 +232,7 @@ step_local_config() {
 
   if [[ "$ACCESS_MODE" == "local" ]]; then
     PUBLIC_URL="$LOCAL_URL"
-    S3_PUBLIC_URL="http://${SERVER_IP}:9000"
+    S3_PUBLIC_URL="$LOCAL_URL"
     COOKIE_SECURE="false"
   fi
 }
@@ -242,19 +242,21 @@ step_tailscale_config() {
 
   wt_ok "── Tailscale Setup ────────────────────────────\n\
 \n\
-Tailscale gives you a private HTTPS URL accessible\n\
-from anywhere without opening firewall ports.\n\
+Tailscale gives you an HTTPS URL accessible from\n\
+anywhere without opening firewall ports.\n\
 \n\
 You'll need:\n\
   1. A free Tailscale account (tailscale.com)\n\
   2. An auth key from:\n\
      login.tailscale.com → Settings → Keys\n\
-     → Generate auth key → check Reusable\n\
-\n\
-After install, you must also:\n\
-  • Enable HTTPS certs in Tailscale DNS settings\n\
-  • Add funnel permission to your ACL policy\n\
-  (The installer will show you exactly what to do)"
+     → Generate auth key → check Reusable"
+
+  TS_MODE=$(wt_menu \
+    "How should Tailscale expose DataServer?\n\n\
+Serve  = Private. Only devices on YOUR tailnet.\n\
+Funnel = Public.  Anyone with the URL can access." \
+    "serve"  "Tailscale Serve  — private to your tailnet" \
+    "funnel" "Tailscale Funnel — publicly accessible URL")
 
   while true; do
     TS_AUTHKEY=$(wt_input "Tailscale auth key (tskey-auth-…):" "")
@@ -299,6 +301,21 @@ You'll need:\n\
 \n\
 In the Cloudflare dashboard, set the tunnel route to:\n\
      http://frontend:80"
+
+  if [[ "${MAX_FILE_GB:-2}" -gt 0 ]]; then
+    wt_ok "── Upload Size Warning ────────────────────────\n\
+\n\
+Cloudflare free plan limits uploads to 100 MB.\n\
+Your configured max file size is ${MAX_FILE_GB:-2} GB.\n\
+\n\
+Files larger than 100 MB will fail to upload\n\
+through the tunnel.\n\
+\n\
+Options:\n\
+  • Use Tailscale instead (no upload limit)\n\
+  • Upgrade to Cloudflare Pro (500 MB limit)\n\
+  • Reduce max file size to 0.1 GB (100 MB)"
+  fi
 
   while true; do
     CF_TOKEN=$(wt_input "Cloudflare tunnel token:" "")
@@ -496,6 +513,14 @@ generate_compose() {
     minio_vol="      - minio_data:/data"
   fi
 
+  # MinIO port exposure — only expose console (9001) in production
+  local minio_ports
+  if [[ "$ACCESS_MODE" == "local" ]]; then
+    minio_ports='      - "9000:9000"\n      - "9001:9001"'
+  else
+    minio_ports='      - "127.0.0.1:9001:9001"'
+  fi
+
   cat > "$INSTALL_DIR/docker-compose.yml" <<EOF
 services:
 
@@ -539,8 +564,7 @@ services:
     volumes:
 ${minio_vol}
     ports:
-      - "9000:9000"
-      - "9001:9001"
+${minio_ports}
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 30s
@@ -600,6 +624,14 @@ EOF
   # ── Tailscale service ──────────────────────────────────────
   if [[ "$ACCESS_MODE" == "tailscale" || "$ACCESS_MODE" == "both" ]]; then
     mkdir -p "$INSTALL_DIR/tailscale"
+    local funnel_block=""
+    if [[ "${TS_MODE}" == "funnel" ]]; then
+      funnel_block=',
+  "AllowFunnel": {
+    "'"${TS_FQDN}"':443": true
+  }'
+    fi
+
     cat > "$INSTALL_DIR/tailscale/serve.json" <<SERVEJSON
 {
   "TCP": {
@@ -615,10 +647,7 @@ EOF
         }
       }
     }
-  },
-  "AllowFunnel": {
-    "${TS_FQDN}:443": true
-  }
+  }${funnel_block}
 }
 SERVEJSON
 
@@ -705,6 +734,25 @@ setup_database() {
   success "Database ready."
 }
 
+setup_storage_policy() {
+  info "Configuring storage policy in database…"
+  local db_user="${POSTGRES_USER:-dataserver}"
+  local db_name="${POSTGRES_DB:-dataserver}"
+
+  # Always set per-user quota and max file size in the policy
+  local sql="UPDATE \"StoragePolicy\" SET \"defaultQuotaBytes\" = ${PER_USER_QUOTA_BYTES}, \"maxFileSizeBytes\" = ${MAX_FILE_BYTES}"
+
+  if [[ "$TOTAL_QUOTA_GB" -gt 0 ]]; then
+    local total_bytes=$(( TOTAL_QUOTA_GB * 1024 * 1024 * 1024 ))
+    sql="${sql}, \"totalDriveCapacityBytes\" = ${total_bytes}"
+  fi
+
+  docker exec dataserver_postgres \
+    psql -U "$db_user" -d "$db_name" -c "${sql};" 2>/dev/null \
+    && success "Storage policy configured." \
+    || warn "Could not update storage policy. Set it manually in Admin Panel → Policy."
+}
+
 setup_minio_quota() {
   [[ "$TOTAL_QUOTA_GB" -eq 0 ]] && return
   info "Setting MinIO total storage quota (${TOTAL_QUOTA_GB} GB)…"
@@ -727,14 +775,26 @@ show_done() {
 
   local ts_notes=""
   if [[ "$ACCESS_MODE" == "tailscale" || "$ACCESS_MODE" == "both" ]]; then
-    ts_notes="\n\
-── Tailscale: remaining steps ─────────────\n\
+    if [[ "${TS_MODE}" == "funnel" ]]; then
+      ts_notes="\n\
+── Tailscale Funnel: remaining steps ──────\n\
 1. login.tailscale.com/admin/dns\n\
    → Enable HTTPS Certificates\n\
 \n\
 2. login.tailscale.com/admin/acls  → add:\n\
    \"nodeAttrs\": [{\"target\":[\"autogroup:member\"],\n\
-     \"attr\":[\"funnel\"]}]\n"
+     \"attr\":[\"funnel\"]}]\n\
+\n\
+   Funnel will NOT work without this ACL rule.\n"
+    else
+      ts_notes="\n\
+── Tailscale Serve: remaining step ────────\n\
+1. login.tailscale.com/admin/dns\n\
+   → Enable HTTPS Certificates\n\
+\n\
+   No ACL changes needed — Serve is private\n\
+   to your tailnet by default.\n"
+    fi
   fi
 
   local cf_notes=""
@@ -753,7 +813,7 @@ In dash.cloudflare.com → Zero Trust → Tunnels\n\
 ── Access ─────────────────────────────────\n\
 App URL      : ${PUBLIC_URL}\n\
 LAN fallback : http://${server_ip}:${FRONTEND_PORT}\n\
-MinIO console: http://${server_ip}:9001\n\
+MinIO console: $(if [[ "$ACCESS_MODE" == "local" ]]; then echo "http://${server_ip}:9001"; else echo "http://localhost:9001 (SSH only)"; fi)\n\
 \n\
 ── Admin login ────────────────────────────\n\
 Email    : ${ADMIN_EMAIL}\n\
@@ -812,6 +872,7 @@ main() {
   build_and_start
   wait_for_backend
   setup_database
+  setup_storage_policy
   setup_minio_quota
   show_done
 }
