@@ -114,6 +114,12 @@ var daemonCmd = &cobra.Command{
 			}
 		}()
 
+		// Auto-detect headless when no display is available
+		if !noTray && os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" {
+			log.Info().Msg("No display detected, switching to headless mode")
+			noTray = true
+		}
+
 		if noTray {
 			// Headless mode
 			log.Info().Msg("Running in headless mode (no tray). Press Ctrl+C to stop.")
