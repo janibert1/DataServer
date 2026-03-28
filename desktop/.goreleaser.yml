@@ -2,9 +2,6 @@ version: 2
 
 project_name: dataserver-desktop
 
-monorepo:
-  tag_prefix: desktop/
-
 before:
   hooks:
     - go mod tidy

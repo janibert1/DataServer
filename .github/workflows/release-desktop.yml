@@ -3,7 +3,7 @@ name: Release Desktop Client
 on:
   push:
     tags:
-      - 'desktop/v*'
+      - 'v*'
 
 permissions:
   contents: write
@@ -52,7 +52,7 @@ jobs:
 
       - name: Extract version from tag
         id: version
-        run: echo "version=${GITHUB_REF#refs/tags/desktop/v}" >> $GITHUB_OUTPUT
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
       - name: Build macOS binaries
         working-directory: desktop
