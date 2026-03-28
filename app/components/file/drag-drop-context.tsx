@@ -1,10 +1,12 @@
 import React, { createContext, useContext, useState, useRef, useCallback, useMemo } from 'react';
 import { View, Text, Animated, PanResponder, LayoutRectangle } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 export interface DragItem {
   type: 'file' | 'folder';
   id: string;
   name: string;
+  mimeType?: string;
 }
 
 interface DropTarget {
@@ -42,11 +44,13 @@ interface Props {
   onDropOnItem?: (dragged: DragItem, target: DragItem) => void;
 }
 
+const PREVIEW_WIDTH = 160;
+const PREVIEW_HEIGHT = 56;
+
 export function DragDropProvider({ children, onDropOnFolder, onDropOnItem }: Props) {
   const [isDragging, setIsDragging] = useState(false);
   const [dragItem, setDragItem] = useState<DragItem | null>(null);
   const [hoveredTargetId, setHoveredTargetId] = useState<string | null>(null);
-  const [dragLabel, setDragLabel] = useState('');
 
   const pan = useRef(new Animated.ValueXY()).current;
   const targets = useRef(new Map<string, DropTarget>()).current;
@@ -82,7 +86,7 @@ export function DragDropProvider({ children, onDropOnFolder, onDropOnItem }: Pro
       onMoveShouldSetPanResponder: () => true,
       onPanResponderGrant: () => {},
       onPanResponderMove: (e, gesture) => {
-        pan.setValue({ x: gesture.moveX - 40, y: gesture.moveY - 40 });
+        pan.setValue({ x: gesture.moveX - PREVIEW_WIDTH / 2, y: gesture.moveY - PREVIEW_HEIGHT / 2 });
         const target = findTarget(gesture.moveX, gesture.moveY);
         const current = dragItemRef.current;
         setHoveredTargetId(target && current && target.id !== current.id ? target.id : null);
@@ -114,39 +118,51 @@ export function DragDropProvider({ children, onDropOnFolder, onDropOnItem }: Pro
   const startDrag = useCallback((item: DragItem, pageX: number, pageY: number) => {
     dragItemRef.current = item;
     setDragItem(item);
-    setDragLabel(item.name);
     setIsDragging(true);
-    pan.setValue({ x: pageX - 40, y: pageY - 40 });
+    pan.setValue({ x: pageX - PREVIEW_WIDTH / 2, y: pageY - PREVIEW_HEIGHT / 2 });
   }, []);
 
   return (
     <DragDropCtx.Provider value={{ isDragging, dragItem, hoveredTargetId, registerTarget, unregisterTarget, startDrag }}>
       <View style={{ flex: 1 }}>
         {children}
-        {isDragging && (
+        {isDragging && dragItem && (
           <Animated.View
             style={[
               {
                 position: 'absolute',
                 zIndex: 999,
-                width: 80,
-                height: 80,
-                borderRadius: 12,
-                backgroundColor: 'rgba(37, 99, 235, 0.9)',
+                width: PREVIEW_WIDTH,
+                height: PREVIEW_HEIGHT,
+                borderRadius: 10,
+                backgroundColor: '#fff',
+                borderWidth: 2,
+                borderColor: '#2563eb',
+                flexDirection: 'row',
                 alignItems: 'center',
-                justifyContent: 'center',
+                paddingHorizontal: 10,
+                gap: 8,
                 shadowColor: '#000',
                 shadowOffset: { width: 0, height: 4 },
-                shadowOpacity: 0.3,
+                shadowOpacity: 0.25,
                 shadowRadius: 8,
-                elevation: 10,
+                elevation: 12,
+                opacity: 0.92,
               },
               { transform: pan.getTranslateTransform() },
             ]}
             {...panResponder.panHandlers}
           >
-            <Text style={{ color: 'white', fontSize: 10, fontWeight: '600', textAlign: 'center', paddingHorizontal: 4 }} numberOfLines={2}>
-              {dragLabel}
+            <Ionicons
+              name={dragItem.type === 'folder' ? 'folder' : 'document-outline'}
+              size={22}
+              color={dragItem.type === 'folder' ? '#3b82f6' : '#64748b'}
+            />
+            <Text
+              style={{ color: '#1e293b', fontSize: 13, fontWeight: '500', flex: 1 }}
+              numberOfLines={1}
+            >
+              {dragItem.name}
             </Text>
           </Animated.View>
         )}

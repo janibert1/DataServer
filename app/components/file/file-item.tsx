@@ -35,7 +35,7 @@ export function FileItem({ file, viewMode, onPress, onLongPress, onMorePress }: 
   }
 
   function handleLongPress(e: { nativeEvent: { pageX: number; pageY: number } }) {
-    startDrag({ type: 'file', id: file.id, name: file.name }, e.nativeEvent.pageX, e.nativeEvent.pageY);
+    startDrag({ type: 'file', id: file.id, name: file.name, mimeType: file.mimeType }, e.nativeEvent.pageX, e.nativeEvent.pageY);
   }
 
   if (viewMode === 'grid') {

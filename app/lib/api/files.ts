@@ -82,8 +82,14 @@ export function uploadFiles(
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable && onProgress) {
-        onProgress(e.loaded / e.total);
+      if (onProgress) {
+        if (e.lengthComputable && e.total > 0) {
+          onProgress(e.loaded / e.total);
+        } else if (e.loaded > 0) {
+          // If total is unknown, report loaded bytes as a fraction
+          // (indeterminate but shows activity)
+          onProgress(Math.min(0.95, e.loaded / (e.loaded + 1024 * 1024)));
+        }
       }
     };
     xhr.onload = () => {
