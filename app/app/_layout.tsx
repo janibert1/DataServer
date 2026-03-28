@@ -15,6 +15,32 @@ LogBox.ignoreLogs(['Each child in a list should have a unique "key" prop']);
 import { useAuthStore } from '@/stores/auth-store';
 import { useAuthInit } from '@/lib/hooks/use-auth';
 import { UploadProgress } from '@/components/file/upload-progress';
+import { DownloadProgress } from '@/components/file/download-progress';
+import { useUploadStore } from '@/stores/upload-store';
+import { useDownloadStore } from '@/stores/download-store';
+
+function TransferOverlays() {
+  const uploads = useUploadStore((s) => s.uploads);
+  const uploadVisible = useUploadStore((s) => s.isVisible);
+  const downloads = useDownloadStore((s) => s.downloads);
+  const downloadVisible = useDownloadStore((s) => s.isVisible);
+
+  const showUpload = uploadVisible && uploads.length > 0;
+  const showDownload = downloadVisible && downloads.length > 0;
+
+  if (!showUpload && !showDownload) return null;
+
+  return (
+    <View style={{ position: 'absolute', bottom: 80, right: 16, left: 16, zIndex: 1000 }} pointerEvents="box-none">
+      {showDownload && (
+        <View style={{ marginBottom: showUpload ? 8 : 0 }}>
+          <DownloadProgress />
+        </View>
+      )}
+      {showUpload && <UploadProgress />}
+    </View>
+  );
+}
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -88,7 +114,7 @@ export default function RootLayout() {
             <Stack.Screen name="file-preview" options={{ presentation: 'fullScreenModal' }} />
             <Stack.Screen name="settings" options={{ headerShown: false }} />
           </Stack>
-          <UploadProgress />
+          <TransferOverlays />
         </View>
       </AuthGate>
       <StatusBar style="dark" />

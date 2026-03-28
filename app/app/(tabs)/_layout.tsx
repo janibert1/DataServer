@@ -4,23 +4,37 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useAuthStore } from '@/stores/auth-store';
 import { useUploadStore } from '@/stores/upload-store';
+import { useDownloadStore } from '@/stores/download-store';
 import { Avatar } from '@/components/ui/avatar';
 
 function HeaderRight() {
   const router = useRouter();
   const { user } = useAuthStore();
-  const { uploads, setVisible } = useUploadStore();
-  const activeCount = uploads.filter((u) => u.status === 'uploading' || u.status === 'pending').length;
+  const { uploads, setVisible: setUploadVisible } = useUploadStore();
+  const { downloads, setVisible: setDownloadVisible } = useDownloadStore();
+  const activeUploads = uploads.filter((u) => u.status === 'uploading' || u.status === 'pending').length;
+  const activeDownloads = downloads.filter((d) => d.status === 'downloading' || d.status === 'pending').length;
 
   return (
     <View className="flex-row items-center gap-3 mr-4">
       <TouchableOpacity
-        onPress={() => setVisible(true)}
+        onPress={() => setDownloadVisible(true)}
         className="relative"
       >
-        {activeCount > 0 && (
+        {activeDownloads > 0 && (
+          <View className="absolute -top-1 -right-1 bg-green-500 rounded-full w-4 h-4 items-center justify-center z-10">
+            <Text className="text-[10px] text-white font-bold">{activeDownloads > 9 ? '9+' : activeDownloads}</Text>
+          </View>
+        )}
+        <Ionicons name="cloud-download-outline" size={22} color="#475569" />
+      </TouchableOpacity>
+      <TouchableOpacity
+        onPress={() => setUploadVisible(true)}
+        className="relative"
+      >
+        {activeUploads > 0 && (
           <View className="absolute -top-1 -right-1 bg-blue-500 rounded-full w-4 h-4 items-center justify-center z-10">
-            <Text className="text-[10px] text-white font-bold">{activeCount > 9 ? '9+' : activeCount}</Text>
+            <Text className="text-[10px] text-white font-bold">{activeUploads > 9 ? '9+' : activeUploads}</Text>
           </View>
         )}
         <Ionicons name="cloud-upload-outline" size={22} color="#475569" />

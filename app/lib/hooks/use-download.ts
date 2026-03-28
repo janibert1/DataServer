@@ -1,50 +1,62 @@
-import { downloadAsync, cacheDirectory } from 'expo-file-system/legacy';
+import { createDownloadResumable, cacheDirectory } from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
-import Toast from 'react-native-toast-message';
 import { getFileDownloadUrl } from '@/lib/api/files';
+import { useDownloadStore } from '@/stores/download-store';
 
 export async function downloadAndShareFile(fileId: string) {
+  const { addDownload, updateDownload } = useDownloadStore.getState();
+  let downloadId = '';
   let filename = 'file';
 
   try {
-    // Step 1: Get the signed S3 URL
     const data = await getFileDownloadUrl(fileId);
     const { downloadUrl } = data;
     filename = data.filename;
 
-    Toast.show({ type: 'info', text1: 'Downloading...', text2: filename, autoHide: false });
+    downloadId = addDownload(filename);
+    updateDownload(downloadId, { status: 'downloading' });
 
-    // Step 2: Download from the signed S3 URL
     if (!cacheDirectory) throw new Error('Cache directory not available');
     const localUri = cacheDirectory + filename;
 
-    const downloadResult = await downloadAsync(downloadUrl, localUri);
+    const download = createDownloadResumable(
+      downloadUrl,
+      localUri,
+      {},
+      (progress) => {
+        if (progress.totalBytesExpectedToWrite > 0) {
+          updateDownload(downloadId, {
+            progress: progress.totalBytesWritten / progress.totalBytesExpectedToWrite,
+            fileSize: progress.totalBytesExpectedToWrite,
+          });
+        }
+      },
+    );
 
-    if (downloadResult.status !== 200) {
-      throw new Error(`Download failed with status ${downloadResult.status}`);
+    const result = await download.downloadAsync();
+    if (!result || result.status !== 200) {
+      throw new Error(`Download failed with status ${result?.status ?? 'unknown'}`);
     }
 
-    Toast.hide();
-    Toast.show({ type: 'success', text1: 'Download complete', text2: filename });
+    updateDownload(downloadId, { status: 'complete', progress: 1 });
 
-    // Step 3: Open the native share sheet
     const canShare = await Sharing.isAvailableAsync();
     if (canShare) {
-      await Sharing.shareAsync(downloadResult.uri, {
-        mimeType: downloadResult.headers?.['content-type'] || 'application/octet-stream',
+      await Sharing.shareAsync(result.uri, {
+        mimeType: result.headers?.['content-type'] || 'application/octet-stream',
         dialogTitle: `Share ${filename}`,
         UTI: undefined,
       });
     }
 
-    return downloadResult.uri;
+    return result.uri;
   } catch (error) {
-    Toast.hide();
-    Toast.show({
-      type: 'error',
-      text1: 'Download failed',
-      text2: error instanceof Error ? error.message : 'Unknown error',
-    });
+    if (downloadId) {
+      updateDownload(downloadId, {
+        status: 'error',
+        error: error instanceof Error ? error.message : 'Download failed',
+      });
+    }
     throw error;
   }
 }

@@ -1,6 +1,5 @@
-import React, { createContext, useContext, useState, useRef, useCallback } from 'react';
-import { View, Text, Animated, PanResponder, Dimensions, LayoutRectangle } from 'react-native';
-import type { DriveFile, DriveFolder } from '@/lib/types';
+import React, { createContext, useContext, useState, useRef, useCallback, useMemo } from 'react';
+import { View, Text, Animated, PanResponder, LayoutRectangle } from 'react-native';
 
 export interface DragItem {
   type: 'file' | 'folder';
@@ -52,6 +51,13 @@ export function DragDropProvider({ children, onDropOnFolder, onDropOnItem }: Pro
   const pan = useRef(new Animated.ValueXY()).current;
   const targets = useRef(new Map<string, DropTarget>()).current;
 
+  // Mutable refs so PanResponder always reads current values
+  const dragItemRef = useRef<DragItem | null>(null);
+  const onDropOnFolderRef = useRef(onDropOnFolder);
+  const onDropOnItemRef = useRef(onDropOnItem);
+  onDropOnFolderRef.current = onDropOnFolder;
+  onDropOnItemRef.current = onDropOnItem;
+
   const registerTarget = useCallback((target: DropTarget) => {
     targets.set(target.id, target);
   }, []);
@@ -70,7 +76,7 @@ export function DragDropProvider({ children, onDropOnFolder, onDropOnItem }: Pro
     return null;
   }, []);
 
-  const panResponder = useRef(
+  const panResponder = useMemo(() =>
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
@@ -78,30 +84,35 @@ export function DragDropProvider({ children, onDropOnFolder, onDropOnItem }: Pro
       onPanResponderMove: (e, gesture) => {
         pan.setValue({ x: gesture.moveX - 40, y: gesture.moveY - 40 });
         const target = findTarget(gesture.moveX, gesture.moveY);
-        setHoveredTargetId(target && target.id !== dragItem?.id ? target.id : null);
+        const current = dragItemRef.current;
+        setHoveredTargetId(target && current && target.id !== current.id ? target.id : null);
       },
       onPanResponderRelease: (e, gesture) => {
         const target = findTarget(gesture.moveX, gesture.moveY);
-        if (target && dragItem && target.id !== dragItem.id) {
+        const current = dragItemRef.current;
+        if (target && current && target.id !== current.id) {
           if (target.type === 'folder') {
-            onDropOnFolder?.(dragItem, target.id);
+            onDropOnFolderRef.current?.(current, target.id);
           } else {
-            onDropOnItem?.(dragItem, { type: target.type, id: target.id, name: target.name });
+            onDropOnItemRef.current?.(current, { type: target.type, id: target.id, name: target.name });
           }
         }
         setIsDragging(false);
         setDragItem(null);
+        dragItemRef.current = null;
         setHoveredTargetId(null);
       },
       onPanResponderTerminate: () => {
         setIsDragging(false);
         setDragItem(null);
+        dragItemRef.current = null;
         setHoveredTargetId(null);
       },
-    })
-  ).current;
+    }),
+  [findTarget]);
 
   const startDrag = useCallback((item: DragItem, pageX: number, pageY: number) => {
+    dragItemRef.current = item;
     setDragItem(item);
     setDragLabel(item.name);
     setIsDragging(true);
