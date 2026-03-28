@@ -2,19 +2,21 @@ version: 2
 
 project_name: dataserver-desktop
 
+monorepo:
+  tag_prefix: desktop/
+
 before:
   hooks:
     - go mod tidy
 
 builds:
-  - id: dataserver-linux
+  - id: dataserver-linux-tray
     main: .
     binary: dataserver
     goos:
       - linux
     goarch:
       - amd64
-      - arm64
     env:
       - CGO_ENABLED=1
     flags:
@@ -22,22 +24,7 @@ builds:
     ldflags:
       - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}}
 
-  - id: dataserver-darwin
-    main: .
-    binary: dataserver
-    goos:
-      - darwin
-    goarch:
-      - amd64
-      - arm64
-    env:
-      - CGO_ENABLED=1
-    flags:
-      - -trimpath
-    ldflags:
-      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}}
-
-  - id: dataserver-notray
+  - id: dataserver-headless
     main: .
     binary: dataserver
     goos:
@@ -55,21 +42,15 @@ builds:
       - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}}
 
 archives:
-  - id: archive-linux
+  - id: archive-linux-tray
     builds:
-      - dataserver-linux
+      - dataserver-linux-tray
     name_template: "dataserver-desktop_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     format: tar.gz
 
-  - id: archive-darwin
+  - id: archive-headless
     builds:
-      - dataserver-darwin
-    name_template: "dataserver-desktop_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    format: zip
-
-  - id: archive-notray
-    builds:
-      - dataserver-notray
+      - dataserver-headless
     name_template: "dataserver-desktop_{{ .Version }}_{{ .Os }}_{{ .Arch }}_headless"
     format: tar.gz
 
