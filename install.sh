@@ -501,28 +501,28 @@ JWT_SECRET=${JWT_SECRET}
 SESSION_MAX_AGE_MS=86400000
 
 # ─── Google OAuth ────────────────────────────
-GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
-GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+GOOGLE_CLIENT_ID="${GOOGLE_CLIENT_ID:-}"
+GOOGLE_CLIENT_SECRET="${GOOGLE_CLIENT_SECRET:-}"
 GOOGLE_CALLBACK_URL=${PUBLIC_URL}/api/auth/google/callback
 
 # ─── S3 / MinIO ──────────────────────────────
 S3_ENDPOINT=http://minio:9000
 S3_PUBLIC_URL=${S3_PUBLIC_URL}
 S3_ACCESS_KEY=${MINIO_ROOT_USER}
-S3_SECRET_KEY=${MINIO_ROOT_PASSWORD}
+S3_SECRET_KEY="${MINIO_ROOT_PASSWORD}"
 S3_BUCKET=dataserver-files
 S3_REGION=us-east-1
 S3_FORCE_PATH_STYLE=true
 MINIO_ROOT_USER=${MINIO_ROOT_USER}
-MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD}"
 
 # ─── Email ───────────────────────────────────
 SMTP_HOST=${SMTP_HOST}
 SMTP_PORT=${SMTP_PORT}
 SMTP_SECURE=${SMTP_SECURE}
-SMTP_USER=${SMTP_USER:-}
-SMTP_PASS=${SMTP_PASS:-}
-SMTP_FROM=${SMTP_FROM}
+SMTP_USER="${SMTP_USER:-}"
+SMTP_PASS="${SMTP_PASS:-}"
+SMTP_FROM="${SMTP_FROM}"
 
 # ─── ClamAV ──────────────────────────────────
 CLAMAV_HOST=clamav
@@ -542,8 +542,8 @@ RATE_LIMIT_UPLOAD_WINDOW_MS=3600000
 
 # ─── Admin bootstrap ─────────────────────────
 ADMIN_EMAIL=${ADMIN_EMAIL}
-ADMIN_PASSWORD=${ADMIN_PASSWORD}
-ADMIN_DISPLAY_NAME=${ADMIN_NAME}
+ADMIN_PASSWORD="${ADMIN_PASSWORD}"
+ADMIN_DISPLAY_NAME="${ADMIN_NAME}"
 EOF
 
   [[ "${ACCESS_MODE}" == "tailscale" || "${ACCESS_MODE}" == "both" ]] && \
