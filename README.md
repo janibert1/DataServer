@@ -33,6 +33,7 @@ A production-ready, **invitation-only** cloud storage platform — your own self
 - [Local Development Setup](#local-development-setup)
 - [Managing the Server](#managing-the-server)
 - [Updating](#updating)
+- [Desktop Sync Client](#desktop-sync-client)
 - [Troubleshooting](#troubleshooting)
 
 ---
@@ -51,6 +52,7 @@ A production-ready, **invitation-only** cloud storage platform — your own self
 | **Security** | Argon2id passwords, signed download URLs (never exposed), ClamAV virus scanning, MIME validation, rate limiting |
 | **Quotas** | Per-user configurable storage quotas + server-wide capacity limit with disk detection |
 | **Mobile app** | iOS/Android companion app (Expo/React Native) with upload queue, drag-and-drop, offline-ready |
+| **Desktop sync** | OneDrive/iCloud-style background sync daemon for Linux and macOS with system tray |
 | **Notifications** | In-app + email notifications for shares, security events, storage warnings |
 | **Audit logging** | Immutable log of every sensitive action with user, IP, and timestamp |
 | **Background jobs** | Thumbnail generation, virus scanning, 30-day trash cleanup — async via BullMQ |
@@ -702,6 +704,95 @@ If there are database schema changes:
 ```bash
 sudo docker compose exec backend npx prisma db push
 ```
+
+---
+
+## Desktop Sync Client
+
+A lightweight background daemon that syncs your DataServer files to a local folder — like OneDrive or iCloud Drive. Available for **Linux** and **macOS**.
+
+### Features
+
+- Bidirectional sync to `~/DataServer/`
+- System tray icon with status, pause/resume, and quick actions
+- Browser-based login (supports Google OAuth and 2FA — no passwords in the desktop app)
+- Auto-start on boot (XDG autostart on Linux, launchd on macOS)
+- File watcher for instant local change detection + 30-second polling for remote changes
+- Conflict resolution: if both sides change a file, the remote version wins and the local copy is saved as `file (Conflict 2026-03-28).ext`
+
+### Install
+
+**One-line install:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/janibert1/DataServer/master/desktop/install.sh | bash
+```
+
+Or download the binary from [GitHub Releases](https://github.com/janibert1/DataServer/releases) and place it in your PATH.
+
+### Usage
+
+```bash
+# 1. Log in (opens browser for authentication)
+dataserver login
+
+# 2. Start the sync daemon (runs with system tray)
+dataserver daemon
+
+# Run without system tray (headless/server mode)
+dataserver daemon --no-tray
+
+# Run a single sync cycle
+dataserver sync
+
+# Check status
+dataserver status
+
+# View configuration
+dataserver config
+
+# Log out (stops autostart, revokes token)
+dataserver logout
+```
+
+After running `dataserver login`, the daemon is registered to start automatically on boot. Your files sync to `~/DataServer/` by default.
+
+### Configuration
+
+Config file location:
+- **Linux:** `~/.config/dataserver/config.json`
+- **macOS:** `~/Library/Application Support/DataServer/config.json`
+
+```json
+{
+  "serverUrl": "https://dataserver.example.com",
+  "syncDir": "~/DataServer",
+  "pollIntervalSeconds": 30,
+  "ignoredPatterns": [".DS_Store", "Thumbs.db", "*.tmp", ".git"],
+  "logLevel": "info"
+}
+```
+
+### How it works
+
+1. **Login** generates a device code, opens your browser to the DataServer web UI, and waits for you to approve access. An API token is issued and stored in your OS keychain (macOS Keychain / Linux Secret Service).
+2. **Initial sync** fetches the full file and folder tree from the server and downloads everything to your sync folder.
+3. **Ongoing sync** polls the server every 30 seconds for changes. A local file watcher (fsnotify) detects changes immediately and triggers uploads within 2 seconds.
+4. **State tracking** uses a local SQLite database to track what has been synced, enabling efficient three-way diffs (local filesystem vs local DB vs remote server).
+
+### Building from source
+
+```bash
+cd desktop
+
+# With system tray (requires GTK3 dev libraries on Linux)
+make build
+
+# Without system tray (no cgo, works everywhere)
+make build-notray
+```
+
+Linux tray dependencies: `sudo apt install libayatana-appindicator3-dev libgtk-3-dev`
 
 ---
 

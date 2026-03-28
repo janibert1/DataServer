@@ -1,0 +1,91 @@
+version: 2
+
+project_name: dataserver-desktop
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: dataserver-linux
+    main: .
+    binary: dataserver
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=1
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}}
+
+  - id: dataserver-darwin
+    main: .
+    binary: dataserver
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=1
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}}
+
+  - id: dataserver-notray
+    main: .
+    binary: dataserver
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+    tags:
+      - notray
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}}
+
+archives:
+  - id: archive-linux
+    builds:
+      - dataserver-linux
+    name_template: "dataserver-desktop_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format: tar.gz
+
+  - id: archive-darwin
+    builds:
+      - dataserver-darwin
+    name_template: "dataserver-desktop_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format: zip
+
+  - id: archive-notray
+    builds:
+      - dataserver-notray
+    name_template: "dataserver-desktop_{{ .Version }}_{{ .Os }}_{{ .Arch }}_headless"
+    format: tar.gz
+
+checksum:
+  name_template: 'checksums.txt'
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+
+release:
+  github:
+    owner: "{{ .Env.GITHUB_REPOSITORY_OWNER }}"
+    name: Dataserver
+  prerelease: auto
+  name_template: "Desktop Client v{{ .Version }}"

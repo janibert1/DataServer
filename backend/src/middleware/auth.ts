@@ -3,6 +3,7 @@ import passport from 'passport';
 import { Strategy as LocalStrategy } from 'passport-local';
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import { hash, verify } from '@node-rs/argon2';
+import crypto from 'crypto';
 import { prisma } from '../lib/prisma';
 import { config } from '../config';
 import { logger } from '../lib/logger';
@@ -153,6 +154,62 @@ passport.deserializeUser(async (id: string, done) => {
     done(error);
   }
 });
+
+// ─── API token auth ─────────────────────────────────────────
+
+const USER_SELECT = {
+  id: true,
+  email: true,
+  displayName: true,
+  role: true,
+  status: true,
+  emailVerified: true,
+  authProvider: true,
+  avatarUrl: true,
+  storageQuotaBytes: true,
+  storageUsedBytes: true,
+  twoFactorEnabled: true,
+  lastLoginAt: true,
+  createdAt: true,
+};
+
+export async function authenticateApiToken(req: Request, _res: Response, next: NextFunction): Promise<void> {
+  if (req.user) return next();
+
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ds_')) return next();
+
+  const token = authHeader.slice(7);
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+
+  try {
+    const apiToken = await prisma.apiToken.findUnique({
+      where: { tokenHash },
+      include: { user: { select: USER_SELECT } },
+    });
+
+    if (!apiToken || apiToken.revokedAt || (apiToken.expiresAt && apiToken.expiresAt < new Date())) {
+      return next();
+    }
+
+    if (apiToken.user.status === UserStatus.DELETED || apiToken.user.status === UserStatus.SUSPENDED) {
+      return next();
+    }
+
+    (req as any).user = apiToken.user;
+    (req as any).apiTokenId = apiToken.id;
+
+    // Fire-and-forget: update lastUsedAt
+    prisma.apiToken.update({
+      where: { id: apiToken.id },
+      data: { lastUsedAt: new Date(), lastUsedIp: req.ip },
+    }).catch(() => {});
+  } catch (err) {
+    logger.error('API token auth error', { error: (err as Error).message });
+  }
+
+  next();
+}
 
 // ─── Middleware ───────────────────────────────────────────────
 

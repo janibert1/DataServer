@@ -144,6 +144,7 @@ model User {
   flaggedContent     ContentFlag[]  @relation("FlagReporter")
   reviewedFlags      ContentFlag[]  @relation("FlagReviewer")
   starredItems       StarredItem[]
+  apiTokens          ApiToken[]
 
   @@index([email])
   @@index([googleId])
@@ -233,6 +234,7 @@ model Folder {
   @@index([parentId])
   @@index([path])
   @@index([isTrashed])
+  @@index([updatedAt])
 }
 
 model File {
@@ -274,6 +276,7 @@ model File {
   @@index([isTrashed])
   @@index([mimeType])
   @@index([name])
+  @@index([updatedAt])
 }
 
 model FileVersion {
@@ -399,6 +402,23 @@ model ContentFlag {
 
   @@index([reporterId])
   @@index([status])
+}
+
+model ApiToken {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  tokenHash   String    @unique
+  tokenPrefix String
+  lastUsedAt  DateTime?
+  lastUsedIp  String?
+  expiresAt   DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([userId])
+  @@index([tokenHash])
 }
 
 model StoragePolicy {

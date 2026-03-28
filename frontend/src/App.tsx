@@ -34,6 +34,7 @@ import { AdminPolicyPage } from './pages/admin/AdminPolicyPage';
 
 // Other
 import { NotFoundPage } from './pages/NotFoundPage';
+import { DeviceAuthPage } from './pages/DeviceAuthPage';
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuthStore();
@@ -72,6 +73,7 @@ function AppRoutes() {
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route path="/accept-invite" element={<AcceptInvitePage />} />
+      <Route path="/device-auth" element={<DeviceAuthPage />} />
 
       {/* Drive routes */}
       <Route path="/drive" element={<RequireAuth><DriveLayout /></RequireAuth>}>

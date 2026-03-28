@@ -6,7 +6,7 @@ import morgan from 'morgan';
 import session from 'express-session';
 import RedisStore from 'connect-redis';
 import cookieParser from 'cookie-parser';
-import { passport } from './middleware/auth';
+import { passport, authenticateApiToken } from './middleware/auth';
 import { redis } from './lib/redis';
 import { config } from './config';
 import { logger } from './lib/logger';
@@ -92,6 +92,7 @@ export function createApp() {
   // ─── Passport ────────────────────────────────────────────────
   app.use(passport.initialize());
   app.use(passport.session());
+  app.use(authenticateApiToken);
 
   // ─── Rate limiting ───────────────────────────────────────────
   app.use('/api', apiRateLimiter);

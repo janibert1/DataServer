@@ -7,6 +7,8 @@ import { sharedRouter } from './shared';
 import { notificationsRouter } from './notifications';
 import { adminRouter } from './admin';
 import { accountRouter } from './account';
+import { tokensRouter } from './tokens';
+import { syncRouter } from './sync';
 
 export const router = Router();
 
@@ -18,3 +20,5 @@ router.use('/shared', sharedRouter);
 router.use('/notifications', notificationsRouter);
 router.use('/admin', adminRouter);
 router.use('/account', accountRouter);
+router.use('/tokens', tokensRouter);
+router.use('/sync', syncRouter);
