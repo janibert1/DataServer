@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useRef, useCallback, useMemo } from 'react';
-import { View, Text, Animated, PanResponder, LayoutRectangle } from 'react-native';
+import { View, Text, PanResponder, LayoutRectangle, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 export interface DragItem {
@@ -44,18 +44,17 @@ interface Props {
   onDropOnItem?: (dragged: DragItem, target: DragItem) => void;
 }
 
-const PREVIEW_WIDTH = 160;
-const PREVIEW_HEIGHT = 56;
+const PREVIEW_W = 160;
+const PREVIEW_H = 56;
 
 export function DragDropProvider({ children, onDropOnFolder, onDropOnItem }: Props) {
   const [isDragging, setIsDragging] = useState(false);
   const [dragItem, setDragItem] = useState<DragItem | null>(null);
   const [hoveredTargetId, setHoveredTargetId] = useState<string | null>(null);
+  const [previewPos, setPreviewPos] = useState({ x: 0, y: 0 });
 
-  const pan = useRef(new Animated.ValueXY()).current;
   const targets = useRef(new Map<string, DropTarget>()).current;
 
-  // Mutable refs so PanResponder always reads current values
   const dragItemRef = useRef<DragItem | null>(null);
   const onDropOnFolderRef = useRef(onDropOnFolder);
   const onDropOnItemRef = useRef(onDropOnItem);
@@ -80,19 +79,28 @@ export function DragDropProvider({ children, onDropOnFolder, onDropOnItem }: Pro
     return null;
   }, []);
 
-  const panResponder = useMemo(() =>
+  const endDrag = useCallback(() => {
+    setIsDragging(false);
+    setDragItem(null);
+    dragItemRef.current = null;
+    setHoveredTargetId(null);
+  }, []);
+
+  // Full-screen overlay PanResponder — captures touch movement while dragging
+  const overlayResponder = useMemo(() =>
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
-      onPanResponderGrant: () => {},
-      onPanResponderMove: (e, gesture) => {
-        pan.setValue({ x: gesture.moveX - PREVIEW_WIDTH / 2, y: gesture.moveY - PREVIEW_HEIGHT / 2 });
-        const target = findTarget(gesture.moveX, gesture.moveY);
+      onPanResponderMove: (e) => {
+        const { pageX, pageY } = e.nativeEvent;
+        setPreviewPos({ x: pageX - PREVIEW_W / 2, y: pageY - PREVIEW_H - 20 });
+        const target = findTarget(pageX, pageY);
         const current = dragItemRef.current;
         setHoveredTargetId(target && current && target.id !== current.id ? target.id : null);
       },
-      onPanResponderRelease: (e, gesture) => {
-        const target = findTarget(gesture.moveX, gesture.moveY);
+      onPanResponderRelease: (e) => {
+        const { pageX, pageY } = e.nativeEvent;
+        const target = findTarget(pageX, pageY);
         const current = dragItemRef.current;
         if (target && current && target.id !== current.id) {
           if (target.type === 'folder') {
@@ -101,25 +109,17 @@ export function DragDropProvider({ children, onDropOnFolder, onDropOnItem }: Pro
             onDropOnItemRef.current?.(current, { type: target.type, id: target.id, name: target.name });
           }
         }
-        setIsDragging(false);
-        setDragItem(null);
-        dragItemRef.current = null;
-        setHoveredTargetId(null);
+        endDrag();
       },
-      onPanResponderTerminate: () => {
-        setIsDragging(false);
-        setDragItem(null);
-        dragItemRef.current = null;
-        setHoveredTargetId(null);
-      },
+      onPanResponderTerminate: () => endDrag(),
     }),
-  [findTarget]);
+  [findTarget, endDrag]);
 
   const startDrag = useCallback((item: DragItem, pageX: number, pageY: number) => {
     dragItemRef.current = item;
     setDragItem(item);
     setIsDragging(true);
-    pan.setValue({ x: pageX - PREVIEW_WIDTH / 2, y: pageY - PREVIEW_HEIGHT / 2 });
+    setPreviewPos({ x: pageX - PREVIEW_W / 2, y: pageY - PREVIEW_H - 20 });
   }, []);
 
   return (
@@ -127,13 +127,15 @@ export function DragDropProvider({ children, onDropOnFolder, onDropOnItem }: Pro
       <View style={{ flex: 1 }}>
         {children}
         {isDragging && dragItem && (
-          <Animated.View
-            style={[
-              {
+          <View style={StyleSheet.absoluteFill} pointerEvents="auto" {...overlayResponder.panHandlers}>
+            {/* Transparent full-screen overlay captures all touches */}
+            <View
+              style={{
                 position: 'absolute',
-                zIndex: 999,
-                width: PREVIEW_WIDTH,
-                height: PREVIEW_HEIGHT,
+                left: previewPos.x,
+                top: previewPos.y,
+                width: PREVIEW_W,
+                height: PREVIEW_H,
                 borderRadius: 10,
                 backgroundColor: '#fff',
                 borderWidth: 2,
@@ -148,23 +150,22 @@ export function DragDropProvider({ children, onDropOnFolder, onDropOnItem }: Pro
                 shadowRadius: 8,
                 elevation: 12,
                 opacity: 0.92,
-              },
-              { transform: pan.getTranslateTransform() },
-            ]}
-            {...panResponder.panHandlers}
-          >
-            <Ionicons
-              name={dragItem.type === 'folder' ? 'folder' : 'document-outline'}
-              size={22}
-              color={dragItem.type === 'folder' ? '#3b82f6' : '#64748b'}
-            />
-            <Text
-              style={{ color: '#1e293b', fontSize: 13, fontWeight: '500', flex: 1 }}
-              numberOfLines={1}
+              }}
+              pointerEvents="none"
             >
-              {dragItem.name}
-            </Text>
-          </Animated.View>
+              <Ionicons
+                name={dragItem.type === 'folder' ? 'folder' : 'document-outline'}
+                size={22}
+                color={dragItem.type === 'folder' ? '#3b82f6' : '#64748b'}
+              />
+              <Text
+                style={{ color: '#1e293b', fontSize: 13, fontWeight: '500', flex: 1 }}
+                numberOfLines={1}
+              >
+                {dragItem.name}
+              </Text>
+            </View>
+          </View>
         )}
       </View>
     </DragDropCtx.Provider>
