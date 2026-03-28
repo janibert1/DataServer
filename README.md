@@ -769,3 +769,8 @@ ports:
 ```
 
 Check what's using a port: `sudo ss -tlnp | grep :3005`
+
+### Uninstall 
+```bash
+cd /opt/dataserver && sudo docker compose down -v
+```
