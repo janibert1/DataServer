@@ -420,20 +420,52 @@ step_google_oauth() {
 }
 
 step_smtp() {
-  if ! wt_yesno "── Email / SMTP (optional) ────────────────────\n\nSet up email for:\n  • Invitation emails\n  • Password reset\n  • Security alerts\n\nConfigure now?"; then
+  if ! wt_yesno "── Email / SMTP (optional) ────────────────────\n\nSet up email for:\n  • Invitation emails\n  • Password reset\n  • Security alerts\n\nYou'll need SMTP credentials from your email\nprovider (Gmail, Outlook, custom mail server).\n\nConfigure now?"; then
     SMTP_HOST="localhost"; SMTP_PORT="587"; SMTP_SECURE="false"
     SMTP_USER=""; SMTP_PASS=""
     SMTP_FROM="DataServer <noreply@dataserver.app>"
     return
   fi
 
-  SMTP_HOST=$(wt_input "SMTP host:" "smtp.gmail.com") || SMTP_HOST="smtp.gmail.com"
-  SMTP_PORT=$(wt_input "SMTP port:" "587") || SMTP_PORT="587"
-  SMTP_USER=$(wt_input "SMTP username / email:" "") || SMTP_USER=""
-  SMTP_PASS=$(wt_pass "SMTP password:") || SMTP_PASS=""
-  SMTP_FROM=$(wt_input "From address:" "DataServer <noreply@${ADMIN_EMAIL#*@}>") || SMTP_FROM="DataServer <noreply@${ADMIN_EMAIL#*@}>"
-  SMTP_SECURE="false"
-  [[ "$SMTP_PORT" == "465" ]] && SMTP_SECURE="true"
+  wt_ok "── SMTP Setup ─────────────────────────────────\n\
+\n\
+Common SMTP settings:\n\
+\n\
+  Gmail:     smtp.gmail.com, port 587\n\
+  Outlook:   smtp.office365.com, port 587\n\
+  Custom:    ask your mail server admin\n\
+\n\
+For Gmail, you need an App Password:\n\
+  myaccount.google.com → Security\n\
+  → 2-Step Verification → App passwords\n\
+  → Generate (select Mail)\n\
+\n\
+The app password looks like: kifn wyjc wbbd zsho\n\
+Spaces are fine — paste it as-is."
+
+  SMTP_HOST=$(wt_input \
+    "SMTP server hostname:\n\n(e.g. smtp.gmail.com, smtp.office365.com)" \
+    "smtp.gmail.com") || SMTP_HOST="smtp.gmail.com"
+
+  SMTP_PORT=$(wt_input \
+    "SMTP port:\n\n  587 = TLS (most common, works with Gmail/Outlook)\n  465 = SSL (older servers)\n  25  = unencrypted (not recommended)" \
+    "587") || SMTP_PORT="587"
+
+  SMTP_USER=$(wt_input \
+    "SMTP username:\n\n(Usually your full email address)" \
+    "") || SMTP_USER=""
+
+  SMTP_PASS=$(wt_pass \
+    "SMTP password:\n\n(For Gmail: use your App Password, spaces are OK)") || SMTP_PASS=""
+
+  SMTP_FROM=$(wt_input \
+    "From address shown in emails:\n\n(Format: Name <email@domain>)" \
+    "DataServer <noreply@${ADMIN_EMAIL#*@}>") || SMTP_FROM="DataServer <noreply@${ADMIN_EMAIL#*@}>"
+  if [[ "$SMTP_PORT" == "465" ]]; then
+    SMTP_SECURE="true"
+  else
+    SMTP_SECURE="false"
+  fi
 }
 
 step_confirm() {
