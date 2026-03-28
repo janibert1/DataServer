@@ -1,0 +1,51 @@
+{
+  "expo": {
+    "name": "DataServer",
+    "slug": "dataserver",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "dataserver",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.dataserver.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Used to take photos for upload",
+        "NSPhotoLibraryUsageDescription": "Used to select photos and videos for upload",
+        "NSDocumentsFolderUsageDescription": "Used to select files for upload"
+      }
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#ffffff"
+        }
+      ],
+      "expo-secure-store",
+      [
+        "expo-document-picker",
+        {
+          "iCloudContainerEnvironment": "Production"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Select photos and videos to upload to your drive",
+          "cameraPermission": "Take photos to upload to your drive"
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}
