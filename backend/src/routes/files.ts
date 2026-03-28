@@ -35,7 +35,11 @@ filesRouter.get('/', async (req: Request, res: Response) => {
     status: { in: [FileStatus.ACTIVE, FileStatus.PROCESSING] },
   };
 
-  if (folderId) where.folderId = folderId;
+  if (folderId) {
+    where.folderId = folderId;
+  } else if (!search) {
+    where.folderId = null; // Root view: only show files not inside any folder
+  }
   if (search) where.name = { contains: search, mode: 'insensitive' };
 
   const validSort = ['name', 'size', 'createdAt', 'updatedAt', 'mimeType'];
