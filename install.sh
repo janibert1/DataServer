@@ -217,8 +217,28 @@ step_access_mode() {
 "── Access Mode ────────────────────────────────\n\nHow will you access DataServer?\n(You can change this later by re-running the installer)" \
     "local"      "Local network only     — access via LAN IP, no internet" \
     "tailscale"  "Tailscale              — private HTTPS, access from anywhere" \
-    "cloudflare" "Cloudflare Tunnel      — public HTTPS on your own domain" \
+    "cloudflare" "Cloudflare Tunnel      — public HTTPS on your domain (100 MB upload limit)" \
     "both"       "Tailscale + Cloudflare — private & public access")
+
+  if [[ "$ACCESS_MODE" == "cloudflare" || "$ACCESS_MODE" == "both" ]]; then
+    local cf_max="${MAX_FILE_GB:-2}"
+    if [[ "$cf_max" -gt 0 ]]; then
+      wt_ok "── Cloudflare Upload Limit ────────────────────\n\
+\n\
+Cloudflare free plan limits uploads to 100 MB.\n\
+Your configured max file size is ${cf_max} GB.\n\
+\n\
+Files larger than 100 MB will fail to upload\n\
+through the Cloudflare tunnel.\n\
+\n\
+You can work around this by:\n\
+  • Upgrading to Cloudflare Pro (500 MB limit)\n\
+  • Using Tailscale instead (no upload limit)\n\
+  • Reducing max file size in Admin Panel later\n\
+\n\
+This does not affect LAN or Tailscale access."
+    fi
+  fi
 }
 
 step_local_config() {
@@ -290,45 +310,66 @@ step_cloudflare_config() {
 
   wt_ok "── Cloudflare Tunnel Setup ────────────────────\n\
 \n\
-Cloudflare Tunnel makes DataServer publicly accessible\n\
-on your own domain with HTTPS — no port forwarding needed.\n\
+We'll walk you through creating a Cloudflare\n\
+tunnel step by step.\n\
 \n\
 You'll need:\n\
-  1. A domain on Cloudflare (free account works)\n\
-  2. A tunnel token from:\n\
-     dash.cloudflare.com → Zero Trust → Networks → Tunnels\n\
-     → Create a tunnel → Docker → copy the token\n\
+  • A Cloudflare account (free plan works)\n\
+  • A domain added to Cloudflare\n\
 \n\
-In the Cloudflare dashboard, set the tunnel route to:\n\
-     http://frontend:80"
+Press Enter to start."
 
-  if [[ "${MAX_FILE_GB:-2}" -gt 0 ]]; then
-    wt_ok "── Upload Size Warning ────────────────────────\n\
+  wt_ok "── Step 1: Create the tunnel ───────────────────\n\
 \n\
-Cloudflare free plan limits uploads to 100 MB.\n\
-Your configured max file size is ${MAX_FILE_GB:-2} GB.\n\
+Open the Cloudflare dashboard in your browser:\n\
+  dash.cloudflare.com\n\
 \n\
-Files larger than 100 MB will fail to upload\n\
-through the tunnel.\n\
+Navigate to:\n\
+  Networks → Tunnels → Create a tunnel\n\
 \n\
-Options:\n\
-  • Use Tailscale instead (no upload limit)\n\
-  • Upgrade to Cloudflare Pro (500 MB limit)\n\
-  • Reduce max file size to 0.1 GB (100 MB)"
-  fi
+Choose \"Cloudflared\" as the connector type.\n\
+Give it a name (e.g. \"dataserver\").\n\
+\n\
+On the Install Connector page, you'll see a\n\
+token — it's the long string after:\n\
+  cloudflared service install <TOKEN>\n\
+\n\
+Copy ONLY the token (not the full command).\n\
+We handle running cloudflared via Docker.\n\
+\n\
+Press Enter when you have the token."
 
   while true; do
-    CF_TOKEN=$(wt_input "Cloudflare tunnel token:" "")
+    CF_TOKEN=$(wt_input \
+      "Paste your tunnel token here:\n\n(The long string from the install command)" "")
     [[ -n "$CF_TOKEN" ]] && break
-    wt_msg "Tunnel token is required."
+    wt_msg "Tunnel token is required. Copy it from the Cloudflare dashboard."
   done
 
   while true; do
     CF_DOMAIN=$(wt_input \
-      "Your public domain (e.g. files.yourdomain.com):" "")
+      "What domain will DataServer use?\n\n(e.g. files.yourdomain.com)" "")
     [[ -n "$CF_DOMAIN" ]] && break
     wt_msg "Domain is required."
   done
+
+  wt_ok "── Step 2: Configure the public hostname ──────\n\
+\n\
+Back in the Cloudflare dashboard, click Next\n\
+to reach the \"Route tunnel\" page.\n\
+\n\
+Add a public hostname with these settings:\n\
+\n\
+  Subdomain : $(echo "$CF_DOMAIN" | cut -d. -f1)\n\
+  Domain    : $(echo "$CF_DOMAIN" | cut -d. -f2-)\n\
+  Type      : HTTP\n\
+  URL       : frontend:80\n\
+\n\
+NOTE: \"frontend:80\" is a Docker-internal address.\n\
+It will NOT conflict with port 80 on your server.\n\
+The tunnel connects directly to the container.\n\
+\n\
+Click Save tunnel, then press Enter here."
 
   if [[ "$ACCESS_MODE" == "cloudflare" ]]; then
     PUBLIC_URL="https://${CF_DOMAIN}"
@@ -800,11 +841,14 @@ show_done() {
   local cf_notes=""
   if [[ "$ACCESS_MODE" == "cloudflare" || "$ACCESS_MODE" == "both" ]]; then
     cf_notes="\n\
-── Cloudflare: remaining steps ────────────\n\
-In dash.cloudflare.com → Zero Trust → Tunnels\n\
-→ your tunnel → Public Hostname:\n\
-  Domain: ${CF_DOMAIN}\n\
-  Service: http://frontend:80\n"
+── Cloudflare Tunnel ──────────────────────\n\
+Domain  : ${CF_DOMAIN}\n\
+Status  : check dash.cloudflare.com →\n\
+          Networks → Tunnels → your tunnel\n\
+          (should show HEALTHY after ~1 min)\n\
+\n\
+If it stays inactive, check:\n\
+  docker compose logs cloudflared\n"
   fi
 
   wt_ok "\
