@@ -741,71 +741,162 @@ EOF
   success "docker-compose.yml generated."
 }
 
-# ── Build & start ────────────────────────────────────────────
+# ── Build & start (with progress) ────────────────────────────
 
-build_and_start() {
-  cd "$INSTALL_DIR"
-  info "Pulling Docker images (this may take a few minutes)…"
-  docker compose pull --quiet 2>/dev/null || true
-  info "Building DataServer images…"
-  docker compose build --quiet
-  info "Starting all services…"
-  docker compose up -d
-  success "Services started."
+INSTALL_LOG="/tmp/dataserver_install.log"
+
+# Run a step, log output, update gauge. Args: percent label command...
+run_step() {
+  local pct=$1 label="$2"; shift 2
+  echo "XXX"
+  echo "$pct"
+  echo "$label"
+  echo "XXX"
+  if ! "$@" >> "$INSTALL_LOG" 2>&1; then
+    # Don't abort — some steps are allowed to fail (minio quota, etc.)
+    echo "[WARN] Step failed: $label" >> "$INSTALL_LOG"
+  fi
 }
 
-wait_for_backend() {
-  info "Waiting for backend to become healthy…"
+do_install() {
+  cd "$INSTALL_DIR"
+
+  run_step 5  "Cloning / updating repository…" \
+    bash -c 'if [ -d ".git" ]; then git pull --quiet; else git clone --quiet "'"$REPO_URL"'" .; fi'
+
+  # Generate config (these are local functions, call via bash -c with sourcing)
+  echo "XXX"
+  echo "10"
+  echo "Generating configuration files…"
+  echo "XXX"
+  generate_env  >> "$INSTALL_LOG" 2>&1 || true
+  generate_compose >> "$INSTALL_LOG" 2>&1 || true
+
+  run_step 20 "Pulling Docker images (this takes a few minutes)…" \
+    docker compose pull --quiet
+
+  run_step 45 "Building DataServer (compiling backend + frontend)…" \
+    docker compose build --quiet
+
+  run_step 65 "Starting all services…" \
+    docker compose up -d
+
+  # Wait for backend health
+  echo "XXX"
+  echo "72"
+  echo "Waiting for backend to start…"
+  echo "XXX"
   local i=0
   while ! docker exec dataserver_backend \
-        curl -sf http://localhost:4000/api/health &>/dev/null; do
+        curl -sf http://localhost:4000/api/health >> "$INSTALL_LOG" 2>&1; do
     i=$(( i + 1 ))
-    [[ $i -gt 36 ]] && die "Backend did not start after 3 minutes.\nRun: docker compose logs backend"
+    if [[ $i -gt 36 ]]; then
+      echo "[ERROR] Backend did not start after 3 minutes" >> "$INSTALL_LOG"
+      break
+    fi
     sleep 5
   done
-  success "Backend is ready."
-}
 
-setup_database() {
-  info "Initialising database schema…"
-  docker exec dataserver_backend npx prisma db push --skip-generate --accept-data-loss 2>/dev/null
-  info "Seeding admin account…"
-  docker exec dataserver_backend node dist/seed.js 2>/dev/null || \
-    warn "Seed may have already run — that's fine."
-  success "Database ready."
-}
+  run_step 80 "Setting up database schema…" \
+    docker exec dataserver_backend npx prisma db push --skip-generate --accept-data-loss
 
-setup_storage_policy() {
-  info "Configuring storage policy in database…"
+  run_step 85 "Creating admin account…" \
+    bash -c 'docker exec dataserver_backend node dist/seed.js 2>/dev/null || true'
+
+  # Storage policy
+  echo "XXX"
+  echo "90"
+  echo "Configuring storage policy…"
+  echo "XXX"
   local db_user="${POSTGRES_USER:-dataserver}"
   local db_name="${POSTGRES_DB:-dataserver}"
-
-  # Always set per-user quota and max file size in the policy
   local sql="UPDATE \"StoragePolicy\" SET \"defaultQuotaBytes\" = ${PER_USER_QUOTA_BYTES}, \"maxFileSizeBytes\" = ${MAX_FILE_BYTES}"
-
   if [[ "$TOTAL_QUOTA_GB" -gt 0 ]]; then
     local total_bytes=$(( TOTAL_QUOTA_GB * 1024 * 1024 * 1024 ))
     sql="${sql}, \"totalDriveCapacityBytes\" = ${total_bytes}"
   fi
+  docker exec dataserver_postgres psql -U "$db_user" -d "$db_name" -c "${sql};" >> "$INSTALL_LOG" 2>&1 || true
 
-  docker exec dataserver_postgres \
-    psql -U "$db_user" -d "$db_name" -c "${sql};" 2>/dev/null \
-    && success "Storage policy configured." \
-    || warn "Could not update storage policy. Set it manually in Admin Panel → Policy."
+  # MinIO quota
+  if [[ "$TOTAL_QUOTA_GB" -gt 0 ]]; then
+    echo "XXX"
+    echo "95"
+    echo "Setting MinIO storage quota…"
+    echo "XXX"
+    sleep 5
+    docker exec dataserver_minio \
+      mc alias set local http://localhost:9000 \
+        "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" --quiet >> "$INSTALL_LOG" 2>&1 || true
+    docker exec dataserver_minio \
+      mc quota set "local/dataserver-files" --size "${TOTAL_QUOTA_GB}GiB" >> "$INSTALL_LOG" 2>&1 || true
+  fi
+
+  echo "XXX"
+  echo "100"
+  echo "Done!"
+  echo "XXX"
+  sleep 1
 }
 
-setup_minio_quota() {
-  [[ "$TOTAL_QUOTA_GB" -eq 0 ]] && return
-  info "Setting MinIO total storage quota (${TOTAL_QUOTA_GB} GB)…"
-  # Give MinIO a moment after bucket creation by backend
-  sleep 5
-  docker exec dataserver_minio \
-    mc alias set local http://localhost:9000 \
-      "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" --quiet 2>/dev/null || true
-  docker exec dataserver_minio \
-    mc quota set "local/dataserver-files" --size "${TOTAL_QUOTA_GB}GiB" 2>/dev/null \
-    && success "MinIO quota set to ${TOTAL_QUOTA_GB} GB." \
-    || warn "Could not set MinIO quota automatically.\n       Set it manually in the MinIO console (port 9001)."
+run_install_with_progress() {
+  > "$INSTALL_LOG"  # clear log
+  do_install | whiptail --title "DataServer Installer v${VERSION}" \
+    --gauge "Starting installation…" $T_HEIGHT $T_WIDTH 0
+}
+
+# ── Post-install verification ────────────────────────────────
+
+verify_install() {
+  local all_ok=true
+  local status_lines=""
+
+  # Check each critical container
+  local containers="dataserver_postgres dataserver_redis dataserver_minio dataserver_backend dataserver_frontend"
+  [[ "$ACCESS_MODE" == "tailscale" || "$ACCESS_MODE" == "both" ]] && containers="$containers dataserver_tailscale"
+  [[ "$ACCESS_MODE" == "cloudflare" || "$ACCESS_MODE" == "both" ]] && containers="$containers dataserver_cloudflared"
+
+  for c in $containers; do
+    local short_name="${c#dataserver_}"
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${c}$"; then
+      status_lines="${status_lines}  [OK]   ${short_name}\n"
+    else
+      status_lines="${status_lines}  [FAIL] ${short_name}\n"
+      all_ok=false
+    fi
+  done
+
+  # Check backend health endpoint
+  if docker exec dataserver_backend curl -sf http://localhost:4000/api/health &>/dev/null; then
+    status_lines="${status_lines}\n  [OK]   Backend API responding"
+  else
+    status_lines="${status_lines}\n  [FAIL] Backend API not responding"
+    all_ok=false
+  fi
+
+  if $all_ok; then
+    wt_ok "── Installation Verified ──────────────────────\n\
+\n\
+All services are running:\n\
+\n\
+${status_lines}\n\
+\n\
+Everything looks good! Press Enter to see\n\
+your access details."
+  else
+    wt_ok "── Installation Completed With Warnings ───────\n\
+\n\
+Service status:\n\
+\n\
+${status_lines}\n\
+\n\
+Some services may still be starting up.\n\
+ClamAV can take 2-3 minutes on first boot.\n\
+\n\
+Check logs with:\n\
+  cd ${INSTALL_DIR} && docker compose logs -f\n\
+\n\
+Press Enter to see your access details."
+  fi
 }
 
 # ── Completion screen ────────────────────────────────────────
@@ -903,21 +994,9 @@ main() {
   step_smtp
   step_confirm
 
-  # ── Install ──
-  info "Cloning DataServer…"
-  if [[ -d "$INSTALL_DIR/.git" ]]; then
-    git -C "$INSTALL_DIR" pull --quiet
-  else
-    git clone --quiet "$REPO_URL" "$INSTALL_DIR"
-  fi
-
-  generate_env
-  generate_compose
-  build_and_start
-  wait_for_backend
-  setup_database
-  setup_storage_policy
-  setup_minio_quota
+  # ── Install with progress bar ──
+  run_install_with_progress
+  verify_install
   show_done
 }
 
