@@ -49,7 +49,7 @@ type DevicePollResponse struct {
 }
 
 type DownloadResponse struct {
-	URL string `json:"url"`
+	URL string `json:"downloadUrl"`
 }
 
 type UploadedFile struct {
