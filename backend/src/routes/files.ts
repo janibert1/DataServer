@@ -542,5 +542,11 @@ filesRouter.post('/empty-trash', async (req: Request, res: Response) => {
     data: { status: FileStatus.DELETED, deletedAt: new Date() },
   });
 
+  // Also permanently delete trashed folders
+  await prisma.folder.updateMany({
+    where: { ownerId: user.id, isTrashed: true },
+    data: { deletedAt: new Date() },
+  });
+
   res.json({ message: `Permanently deleted ${trashedFiles.length} file(s).`, count: trashedFiles.length });
 });

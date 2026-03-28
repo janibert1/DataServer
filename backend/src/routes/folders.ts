@@ -84,6 +84,44 @@ foldersRouter.get('/starred', async (req: Request, res: Response) => {
   res.json({ folders });
 });
 
+// ─── List trashed folders ────────────────────────────────────
+
+foldersRouter.get('/trashed', async (req: Request, res: Response) => {
+  const user = req.user as any;
+
+  const folders = await prisma.folder.findMany({
+    where: { ownerId: user.id, isTrashed: true, deletedAt: null },
+    orderBy: { trashedAt: 'desc' },
+    select: {
+      id: true, name: true, color: true, trashedAt: true, parentId: true,
+      _count: { select: { files: true, children: true } },
+    },
+  });
+
+  res.json({ folders });
+});
+
+// ─── Permanently delete folder ──────────────────────────────
+
+foldersRouter.delete('/:id/permanent', async (req: Request, res: Response) => {
+  const user = req.user as any;
+  const { id } = req.params;
+
+  const folder = await prisma.folder.findUnique({ where: { id }, select: { ownerId: true, isTrashed: true } });
+  if (!folder || !folder.isTrashed) {
+    res.status(404).json({ error: 'Folder not found in trash.' });
+    return;
+  }
+  if (folder.ownerId !== user.id) {
+    res.status(403).json({ error: 'Only the owner can permanently delete folders.' });
+    return;
+  }
+
+  // Permanently delete the folder and cascade to children
+  await prisma.folder.update({ where: { id }, data: { deletedAt: new Date() } });
+  res.json({ message: 'Folder permanently deleted.' });
+});
+
 // ─── Create folder ───────────────────────────────────────────
 
 foldersRouter.post(
@@ -310,7 +348,37 @@ foldersRouter.post('/:id/trash', async (req: Request, res: Response) => {
     return;
   }
 
-  await prisma.folder.update({ where: { id }, data: { isTrashed: true, trashedAt: new Date() } });
+  const now = new Date();
+
+  // Recursively collect all descendant folder IDs
+  async function getDescendantFolderIds(parentId: string): Promise<string[]> {
+    const children = await prisma.folder.findMany({
+      where: { parentId, isTrashed: false },
+      select: { id: true },
+    });
+    const ids: string[] = [];
+    for (const child of children) {
+      ids.push(child.id);
+      ids.push(...await getDescendantFolderIds(child.id));
+    }
+    return ids;
+  }
+
+  const descendantIds = await getDescendantFolderIds(id);
+  const allFolderIds = [id, ...descendantIds];
+
+  // Trash the folder, all subfolders, and all files inside them
+  await prisma.$transaction([
+    prisma.folder.updateMany({
+      where: { id: { in: allFolderIds } },
+      data: { isTrashed: true, trashedAt: now },
+    }),
+    prisma.file.updateMany({
+      where: { folderId: { in: allFolderIds }, isTrashed: false },
+      data: { isTrashed: true, trashedAt: now },
+    }),
+  ]);
+
   await auditFromRequest(req, AuditAction.FOLDER_DELETED, { entityType: 'Folder', entityId: id });
   res.json({ message: 'Folder moved to trash.' });
 });
@@ -329,7 +397,35 @@ foldersRouter.post('/:id/restore', async (req: Request, res: Response) => {
     return;
   }
 
-  await prisma.folder.update({ where: { id }, data: { isTrashed: false, trashedAt: null } });
+  // Recursively collect all descendant folder IDs
+  async function getDescendantFolderIds(parentId: string): Promise<string[]> {
+    const children = await prisma.folder.findMany({
+      where: { parentId, isTrashed: true },
+      select: { id: true },
+    });
+    const ids: string[] = [];
+    for (const child of children) {
+      ids.push(child.id);
+      ids.push(...await getDescendantFolderIds(child.id));
+    }
+    return ids;
+  }
+
+  const descendantIds = await getDescendantFolderIds(id);
+  const allFolderIds = [id, ...descendantIds];
+
+  // Restore the folder, all subfolders, and all files inside them
+  await prisma.$transaction([
+    prisma.folder.updateMany({
+      where: { id: { in: allFolderIds } },
+      data: { isTrashed: false, trashedAt: null },
+    }),
+    prisma.file.updateMany({
+      where: { folderId: { in: allFolderIds }, isTrashed: true },
+      data: { isTrashed: false, trashedAt: null },
+    }),
+  ]);
+
   res.json({ message: 'Folder restored.' });
 });
 

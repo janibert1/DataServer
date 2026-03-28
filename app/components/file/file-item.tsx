@@ -1,5 +1,6 @@
 import { useRef, useEffect } from 'react';
 import { View, Text, TouchableOpacity } from 'react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { FileIcon } from './file-icon';
@@ -8,6 +9,7 @@ import { usePreviewUrl } from '@/lib/hooks/use-preview-url';
 import { useDragDrop } from './drag-drop-context';
 import type { DriveFile } from '@/lib/types';
 import type { ViewMode } from '@/stores/ui-store';
+import { runOnJS } from 'react-native-reanimated';
 
 interface FileItemProps {
   file: DriveFile;
@@ -20,7 +22,7 @@ interface FileItemProps {
 export function FileItem({ file, viewMode, onPress, onLongPress, onMorePress }: FileItemProps) {
   const hasPreview = !!(file.thumbnailKey || file.previewKey || file.mimeType.startsWith('image/'));
   const previewUrl = usePreviewUrl(file.id, hasPreview);
-  const { isDragging, hoveredTargetId, registerTarget, unregisterTarget, startDrag } = useDragDrop();
+  const { isDragging, hoveredTargetId, registerTarget, unregisterTarget, startDrag, moveDrag, endDrag } = useDragDrop();
   const viewRef = useRef<View>(null);
   const isHovered = hoveredTargetId === file.id;
 
@@ -34,73 +36,103 @@ export function FileItem({ file, viewMode, onPress, onLongPress, onMorePress }: 
     });
   }
 
-  function handleLongPress(e: { nativeEvent: { pageX: number; pageY: number } }) {
-    startDrag({ type: 'file', id: file.id, name: file.name, mimeType: file.mimeType }, e.nativeEvent.pageX, e.nativeEvent.pageY);
-  }
+  const dragGesture = Gesture.Pan()
+    .activateAfterLongPress(400)
+    .onStart((e) => {
+      runOnJS(startDrag)({ type: 'file', id: file.id, name: file.name, mimeType: file.mimeType }, e.absoluteX, e.absoluteY);
+    })
+    .onUpdate((e) => {
+      runOnJS(moveDrag)(e.absoluteX, e.absoluteY);
+    })
+    .onEnd((e) => {
+      runOnJS(endDrag)(e.absoluteX, e.absoluteY);
+    });
+
+  const tapGesture = Gesture.Tap()
+    .onEnd(() => {
+      runOnJS(onPress)();
+    });
+
+  const composed = Gesture.Race(dragGesture, tapGesture);
 
   if (viewMode === 'grid') {
     return (
       <View ref={viewRef} onLayout={handleLayout}>
-        <TouchableOpacity
-          className="bg-white rounded-xl border overflow-hidden shadow-sm"
-          style={{ borderColor: isHovered ? '#2563eb' : '#f1f5f9', borderWidth: isHovered ? 2 : 1 }}
-          onPress={onPress}
-          onLongPress={handleLongPress}
-          activeOpacity={0.7}
-        >
-          <View style={{ aspectRatio: 16 / 9, backgroundColor: '#f8fafc', alignItems: 'center', justifyContent: 'center' }}>
-            {previewUrl ? (
-              <Image source={{ uri: previewUrl }} style={{ width: '100%', height: '100%' }} contentFit="cover" recyclingKey={file.id} />
-            ) : (
-              <FileIcon mimeType={file.mimeType} size={36} />
-            )}
-            {file.isStarred && (
-              <View style={{ position: 'absolute', top: 8, right: 8 }}>
-                <Ionicons name="star" size={14} color="#f59e0b" />
-              </View>
-            )}
-          </View>
-          <View className="flex-row items-center justify-between p-3">
-            <View className="flex-1 mr-2">
-              <Text className="text-sm font-medium text-slate-800" numberOfLines={1}>{file.name}</Text>
-              <Text className="text-xs text-slate-400 mt-0.5">{formatFileSize(file.size)}</Text>
+        <GestureDetector gesture={composed}>
+          <View
+            style={{
+              backgroundColor: '#fff',
+              borderRadius: 12,
+              borderWidth: isHovered ? 2 : 1,
+              borderColor: isHovered ? '#2563eb' : '#f1f5f9',
+              overflow: 'hidden',
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 1 },
+              shadowOpacity: 0.05,
+              shadowRadius: 2,
+              elevation: 1,
+            }}
+          >
+            <View style={{ aspectRatio: 16 / 9, backgroundColor: '#f8fafc', alignItems: 'center', justifyContent: 'center' }}>
+              {previewUrl ? (
+                <Image source={{ uri: previewUrl }} style={{ width: '100%', height: '100%' }} contentFit="cover" recyclingKey={file.id} />
+              ) : (
+                <FileIcon mimeType={file.mimeType} size={36} />
+              )}
+              {file.isStarred && (
+                <View style={{ position: 'absolute', top: 8, right: 8 }}>
+                  <Ionicons name="star" size={14} color="#f59e0b" />
+                </View>
+              )}
             </View>
-            <TouchableOpacity onPress={onMorePress} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Ionicons name="ellipsis-vertical" size={18} color="#94a3b8" />
-            </TouchableOpacity>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 12 }}>
+              <View style={{ flex: 1, marginRight: 8 }}>
+                <Text style={{ fontSize: 14, fontWeight: '500', color: '#1e293b' }} numberOfLines={1}>{file.name}</Text>
+                <Text style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>{formatFileSize(file.size)}</Text>
+              </View>
+              <TouchableOpacity onPress={onMorePress} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Ionicons name="ellipsis-vertical" size={18} color="#94a3b8" />
+              </TouchableOpacity>
+            </View>
           </View>
-        </TouchableOpacity>
+        </GestureDetector>
       </View>
     );
   }
 
   return (
     <View ref={viewRef} onLayout={handleLayout}>
-      <TouchableOpacity
-        className="flex-row items-center bg-white px-4 py-3 border-b"
-        style={{ borderColor: isHovered ? '#2563eb' : '#f1f5f9', backgroundColor: isHovered ? '#eff6ff' : '#fff' }}
-        onPress={onPress}
-        onLongPress={handleLongPress}
-        activeOpacity={0.7}
-      >
-        {previewUrl ? (
-          <View style={{ width: 40, height: 40, borderRadius: 8, overflow: 'hidden', backgroundColor: '#f1f5f9' }}>
-            <Image source={{ uri: previewUrl }} style={{ width: 40, height: 40 }} contentFit="cover" recyclingKey={file.id} />
+      <GestureDetector gesture={composed}>
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            backgroundColor: isHovered ? '#eff6ff' : '#fff',
+            paddingHorizontal: 16,
+            paddingVertical: 12,
+            borderBottomWidth: 1,
+            borderBottomColor: isHovered ? '#2563eb' : '#f1f5f9',
+          }}
+        >
+          {previewUrl ? (
+            <View style={{ width: 40, height: 40, borderRadius: 8, overflow: 'hidden', backgroundColor: '#f1f5f9' }}>
+              <Image source={{ uri: previewUrl }} style={{ width: 40, height: 40 }} contentFit="cover" recyclingKey={file.id} />
+            </View>
+          ) : (
+            <View style={{ width: 40, height: 40, borderRadius: 8, backgroundColor: '#f8fafc', alignItems: 'center', justifyContent: 'center' }}>
+              <FileIcon mimeType={file.mimeType} size={22} />
+            </View>
+          )}
+          <View style={{ flex: 1, marginLeft: 12 }}>
+            <Text style={{ fontSize: 14, fontWeight: '500', color: '#1e293b' }} numberOfLines={1}>{file.name}</Text>
+            <Text style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>{formatFileSize(file.size)} · {formatDate(file.updatedAt)}</Text>
           </View>
-        ) : (
-          <View style={{ width: 40, height: 40, borderRadius: 8, backgroundColor: '#f8fafc', alignItems: 'center', justifyContent: 'center' }}>
-            <FileIcon mimeType={file.mimeType} size={22} />
-          </View>
-        )}
-        <View className="flex-1 ml-3">
-          <Text className="text-sm font-medium text-slate-800" numberOfLines={1}>{file.name}</Text>
-          <Text className="text-xs text-slate-400 mt-0.5">{formatFileSize(file.size)} · {formatDate(file.updatedAt)}</Text>
+          {file.isStarred && <Ionicons name="star" size={14} color="#f59e0b" style={{ marginRight: 8 }} />}
+          <TouchableOpacity onPress={onMorePress} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Ionicons name="ellipsis-vertical" size={18} color="#94a3b8" />
+          </TouchableOpacity>
         </View>
-        {file.isStarred && <Ionicons name="star" size={14} color="#f59e0b" style={{ marginRight: 8 }} />}
-        <TouchableOpacity onPress={onMorePress} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-          <Ionicons name="ellipsis-vertical" size={18} color="#94a3b8" />
-        </TouchableOpacity>
-      </TouchableOpacity>
+      </GestureDetector>
     </View>
   );
 }

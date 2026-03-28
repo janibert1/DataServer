@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, LogBox, View } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -104,21 +105,23 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 
 export default function RootLayout() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <AuthGate>
-        <View style={{ flex: 1 }}>
-          <Stack screenOptions={{ headerShown: false }}>
-            <Stack.Screen name="(auth)" />
-            <Stack.Screen name="(tabs)" />
-            <Stack.Screen name="folder/[id]" options={{ headerShown: true, title: '' }} />
-            <Stack.Screen name="file-preview" options={{ presentation: 'fullScreenModal' }} />
-            <Stack.Screen name="settings" options={{ headerShown: false }} />
-          </Stack>
-          <TransferOverlays />
-        </View>
-      </AuthGate>
-      <StatusBar style="dark" />
-      <Toast />
-    </QueryClientProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <QueryClientProvider client={queryClient}>
+        <AuthGate>
+          <View style={{ flex: 1 }}>
+            <Stack screenOptions={{ headerShown: false }}>
+              <Stack.Screen name="(auth)" />
+              <Stack.Screen name="(tabs)" />
+              <Stack.Screen name="folder/[id]" options={{ headerShown: true, title: '' }} />
+              <Stack.Screen name="file-preview" options={{ presentation: 'fullScreenModal' }} />
+              <Stack.Screen name="settings" options={{ headerShown: false }} />
+            </Stack>
+            <TransferOverlays />
+          </View>
+        </AuthGate>
+        <StatusBar style="dark" />
+        <Toast />
+      </QueryClientProvider>
+    </GestureHandlerRootView>
   );
 }

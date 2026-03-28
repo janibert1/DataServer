@@ -105,7 +105,30 @@ export function useRestoreFolder() {
     mutationFn: (id: string) => api.post(`/folders/${id}/restore`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['folders'] });
+      queryClient.invalidateQueries({ queryKey: ['files'] });
       toast.success('Folder restored.');
+    },
+    onError: (err) => toast.error(getErrorMessage(err)),
+  });
+}
+
+export function useTrashedFolders() {
+  return useQuery({
+    queryKey: ['folders', 'trashed'],
+    queryFn: async () => {
+      const res = await api.get('/folders/trashed');
+      return res.data.folders as DriveFolder[];
+    },
+  });
+}
+
+export function useDeleteFolderPermanently() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/folders/${id}/permanent`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['folders'] });
+      toast.success('Folder permanently deleted.');
     },
     onError: (err) => toast.error(getErrorMessage(err)),
   });
