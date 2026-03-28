@@ -42,7 +42,7 @@ A production-ready, **invitation-only** cloud storage platform — your own self
 |---|---|
 | **Access control** | Invitation-only registration; admins issue platform codes; users share folders via invite links |
 | **Authentication** | Email/password + Google OAuth2; email verification; optional TOTP 2FA; backup codes |
-| **File management** | Upload (drag-and-drop or button), rename, move, trash, restore, permanent delete |
+| **File management** | Upload, drag-and-drop into folders (auto-create folder on file drop), rename, move, trash, restore, permanent delete |
 | **Folder sharing** | 5 granular permission levels; permission inheritance through folder tree |
 | **File previews** | Images, PDFs, plain text, audio streaming, video streaming — all in-browser |
 | **File versioning** | Previous versions retained and restorable |
@@ -460,17 +460,28 @@ You can also browse files via the **MinIO web console** at `http://YOUR_SERVER_I
 
 ## Storage Limits
 
-Three independent limits control storage:
+Four independent limits control storage:
 
 | Limit | Configured via | Scope |
 |---|---|---|
 | **Max file size** | `MAX_FILE_SIZE_BYTES` env var | Per-upload (enforced by backend) |
 | **Per-user quota** | `DEFAULT_QUOTA_BYTES` env var (+ per-user override in admin panel) | Per user account |
-| **Total bucket quota** | MinIO bucket quota | Entire platform |
+| **Server storage limit** | Admin Panel → Platform Policy | Entire platform (respects physical disk, 2 GB buffer) |
+| **MinIO bucket quota** | MinIO CLI / console (optional, additional safety net) | Entire bucket |
 
-### Setting the total bucket quota
+### Server storage limit (recommended)
 
-After services are running:
+Configure in the **Admin Panel → Platform Policy → Server Storage Limit**. This is the easiest way to cap total storage. Features:
+
+- Enforced on every upload (returns 507 when exceeded)
+- Cannot be set above physical disk space minus 2 GB buffer
+- Cannot be set below currently occupied space
+- When shrinking below total allocated user quotas, you can proportionally redistribute quotas
+- Shows real-time disk usage, occupied space, and allocated quotas
+
+### Setting a MinIO bucket quota (optional)
+
+An additional safety net at the storage layer:
 
 ```bash
 # Set to 500 GB total
@@ -482,8 +493,6 @@ sudo docker exec dataserver_minio \
 ```
 
 Or use the **MinIO console** at `:9001` → Buckets → dataserver-files → Summary → Quota.
-
-The interactive installer sets this automatically based on your input.
 
 ---
 
@@ -506,7 +515,7 @@ Access via your avatar (top-right) → **Admin Panel**, or navigate directly:
 | **Audit Logs** | Browse all actions with filters, export CSV |
 | **Storage** | Total usage, per-user breakdown, recalculate stats |
 | **Content Flags** | Review reported files, quarantine or dismiss |
-| **Platform Policy** | Set global defaults: quota, max file size, blocked extensions |
+| **Platform Policy** | Set global defaults: quota, max file size, blocked extensions, server-wide storage capacity limit |
 
 ### Creating invitations
 
