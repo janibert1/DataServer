@@ -2,9 +2,11 @@ package cmd
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -32,8 +34,14 @@ var loginCmd = &cobra.Command{
 		if cfg.ServerURL == "" {
 			fmt.Print("Enter your DataServer URL (e.g. https://dataserver.example.com): ")
 			fmt.Scanln(&cfg.ServerURL)
+			cfg.ServerURL = strings.TrimSpace(cfg.ServerURL)
+			cfg.ServerURL = strings.TrimRight(cfg.ServerURL, "/")
 			if cfg.ServerURL == "" {
 				return fmt.Errorf("server URL is required")
+			}
+			parsed, err := url.Parse(cfg.ServerURL)
+			if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+				return fmt.Errorf("invalid URL: %q — must start with http:// or https://", cfg.ServerURL)
 			}
 			config.Save(cfg)
 		}
