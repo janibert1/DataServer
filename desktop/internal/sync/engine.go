@@ -120,6 +120,7 @@ func (e *Engine) fullSync() error {
 	}
 
 	// Download files
+	downloaded := 0
 	for _, rf := range resp.Files {
 		relPath := e.fileRelPath(rf, folderPaths)
 		absPath := filepath.Join(e.syncDir, relPath)
@@ -132,11 +133,17 @@ func (e *Engine) fullSync() error {
 			}
 		}
 
-		setStatus("syncing", fmt.Sprintf("Downloading %s", rf.Name))
+		// Pause between downloads to avoid overwhelming the server
+		if downloaded > 0 {
+			time.Sleep(500 * time.Millisecond)
+		}
+
+		setStatus("syncing", fmt.Sprintf("Downloading %s (%d/%d)", rf.Name, downloaded+1, len(resp.Files)))
 		if err := e.downloadFile(rf, absPath); err != nil {
 			log.Error().Err(err).Str("file", rf.Name).Msg("Download failed")
 			continue
 		}
+		downloaded++
 
 		size, _ := strconv.ParseInt(rf.Size, 10, 64)
 		e.state.UpsertFile(LocalFile{
@@ -187,6 +194,7 @@ func (e *Engine) deltaSync(since string) error {
 	}
 
 	// 3. Handle remote file changes (downloads)
+	downloaded := 0
 	for _, rf := range resp.Files {
 		existing, _ := e.state.GetFile(rf.ID)
 		if existing != nil && existing.Checksum == rf.Checksum {
@@ -213,11 +221,17 @@ func (e *Engine) deltaSync(since string) error {
 			}
 		}
 
+		// Pause between downloads to avoid overwhelming the server
+		if downloaded > 0 {
+			time.Sleep(500 * time.Millisecond)
+		}
+
 		setStatus("syncing", fmt.Sprintf("Downloading %s", rf.Name))
 		if err := e.downloadFile(rf, absPath); err != nil {
 			log.Error().Err(err).Str("file", rf.Name).Msg("Download failed")
 			continue
 		}
+		downloaded++
 
 		size, _ := strconv.ParseInt(rf.Size, 10, 64)
 		e.state.UpsertFile(LocalFile{
@@ -277,6 +291,7 @@ func (e *Engine) scanLocalChanges() error {
 
 	cfg := config.Get()
 	seenPaths := make(map[string]bool)
+	uploaded := 0
 
 	err := filepath.Walk(e.syncDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -349,17 +364,23 @@ func (e *Engine) scanLocalChanges() error {
 				}
 			}
 
+			// Pause between uploads to stay within rate limits
+			if uploaded > 0 {
+				time.Sleep(1 * time.Second)
+			}
+
 			setStatus("syncing", fmt.Sprintf("Uploading %s", base))
-			uploaded, err := e.client.UploadFile(path, folderID)
+			uploadedFile, err := e.client.UploadFile(path, folderID)
 			if err != nil {
 				log.Error().Err(err).Str("path", relPath).Msg("Upload failed")
 				return nil
 			}
+			uploaded++
 
 			e.state.UpsertFile(LocalFile{
-				RemoteID:   uploaded.ID,
+				RemoteID:   uploadedFile.ID,
 				Path:       relPath,
-				Checksum:   uploaded.Checksum,
+				Checksum:   uploadedFile.Checksum,
 				Size:       info.Size(),
 				ModifiedAt: info.ModTime().UTC().Format(time.RFC3339),
 				SyncedAt:   time.Now().UTC().Format(time.RFC3339),
@@ -387,17 +408,23 @@ func (e *Engine) scanLocalChanges() error {
 			// Trash old version first, then upload new
 			e.client.TrashFile(known.RemoteID)
 
+			// Pause between uploads to stay within rate limits
+			if uploaded > 0 {
+				time.Sleep(1 * time.Second)
+			}
+
 			setStatus("syncing", fmt.Sprintf("Uploading %s", base))
-			uploaded, err := e.client.UploadFile(path, folderID)
+			uploadedFile, err := e.client.UploadFile(path, folderID)
 			if err != nil {
 				log.Error().Err(err).Str("path", relPath).Msg("Re-upload failed")
 				return nil
 			}
+			uploaded++
 
 			e.state.UpsertFile(LocalFile{
-				RemoteID:   uploaded.ID,
+				RemoteID:   uploadedFile.ID,
 				Path:       relPath,
-				Checksum:   uploaded.Checksum,
+				Checksum:   uploadedFile.Checksum,
 				Size:       info.Size(),
 				ModifiedAt: info.ModTime().UTC().Format(time.RFC3339),
 				SyncedAt:   time.Now().UTC().Format(time.RFC3339),

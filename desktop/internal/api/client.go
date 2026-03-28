@@ -9,15 +9,26 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
+)
+
+const (
+	maxRetries       = 5
+	baseRetryDelay   = 2 * time.Second
+	requestThrottle  = 300 * time.Millisecond // min delay between API calls
 )
 
 type Client struct {
 	baseURL    string
 	token      string
 	httpClient *http.Client
+
+	lastRequest time.Time
+	throttleMu  sync.Mutex
 }
 
 func NewClient(baseURL, token string) *Client {
@@ -34,21 +45,80 @@ func (c *Client) SetToken(token string) {
 	c.token = token
 }
 
+func (c *Client) throttle() {
+	c.throttleMu.Lock()
+	defer c.throttleMu.Unlock()
+
+	elapsed := time.Since(c.lastRequest)
+	if elapsed < requestThrottle {
+		time.Sleep(requestThrottle - elapsed)
+	}
+	c.lastRequest = time.Now()
+}
+
 func (c *Client) do(method, path string, body io.Reader, contentType string) (*http.Response, error) {
+	// Buffer the body so we can replay it on retries
+	var bodyBytes []byte
+	if body != nil {
+		var err error
+		bodyBytes, err = io.ReadAll(body)
+		if err != nil {
+			return nil, fmt.Errorf("read request body: %w", err)
+		}
+	}
+
 	url := c.baseURL + "/api" + path
-	req, err := http.NewRequest(method, url, body)
-	if err != nil {
-		return nil, err
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		c.throttle()
+
+		var reqBody io.Reader
+		if bodyBytes != nil {
+			reqBody = bytes.NewReader(bodyBytes)
+		}
+
+		req, err := http.NewRequest(method, url, reqBody)
+		if err != nil {
+			return nil, err
+		}
+
+		if c.token != "" {
+			req.Header.Set("Authorization", "Bearer "+c.token)
+		}
+		if contentType != "" {
+			req.Header.Set("Content-Type", contentType)
+		}
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+
+		if resp.StatusCode != http.StatusTooManyRequests {
+			return resp, nil
+		}
+
+		// Rate limited — parse Retry-After or use exponential backoff
+		resp.Body.Close()
+
+		delay := baseRetryDelay * (1 << attempt)
+		if ra := resp.Header.Get("Retry-After"); ra != "" {
+			if secs, err := strconv.Atoi(ra); err == nil {
+				delay = time.Duration(secs) * time.Second
+			}
+		}
+
+		if attempt < maxRetries {
+			log.Warn().
+				Int("attempt", attempt+1).
+				Dur("backoff", delay).
+				Str("path", path).
+				Msg("Rate limited (429), backing off")
+			time.Sleep(delay)
+		}
 	}
 
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
-	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
-	}
-
-	return c.httpClient.Do(req)
+	return nil, fmt.Errorf("rate limited on %s after %d retries", path, maxRetries)
 }
 
 func (c *Client) getJSON(path string, out interface{}) error {
