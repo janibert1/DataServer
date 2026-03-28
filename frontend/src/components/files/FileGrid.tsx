@@ -6,6 +6,12 @@ import { DriveFile, DriveFolder } from '../../types';
 import { FileIcon } from './FileIcon';
 import { FileContextMenu } from './FileContextMenu';
 
+export interface DragDropPayload {
+  type: 'file' | 'folder';
+  id: string;
+  name: string;
+}
+
 interface Props {
   files: DriveFile[];
   folders: DriveFolder[];
@@ -14,6 +20,8 @@ interface Props {
   onFileAction: (action: string, file: DriveFile) => void;
   onFolderAction: (action: string, folder: DriveFolder) => void;
   isTrash?: boolean;
+  onDropOnFolder?: (dragged: DragDropPayload, targetFolderId: string) => void;
+  onDropOnItem?: (dragged: DragDropPayload, target: DragDropPayload) => void;
 }
 
 function formatBytes(bytes: string | number): string {
@@ -24,26 +32,63 @@ function formatBytes(bytes: string | number): string {
   return `${(n / 1024 ** 3).toFixed(2)} GB`;
 }
 
+function setDragData(e: React.DragEvent, payload: DragDropPayload) {
+  e.dataTransfer.setData('application/json', JSON.stringify(payload));
+  e.dataTransfer.effectAllowed = 'move';
+}
+
+function getDragData(e: React.DragEvent): DragDropPayload | null {
+  try {
+    return JSON.parse(e.dataTransfer.getData('application/json'));
+  } catch {
+    return null;
+  }
+}
+
 function FolderCard({
   folder,
   onDoubleClick,
   onAction,
+  onDropOnFolder,
 }: {
   folder: DriveFolder;
   onDoubleClick: () => void;
   onAction: (action: string) => void;
+  onDropOnFolder?: (dragged: DragDropPayload) => void;
 }) {
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
+  const [dragOver, setDragOver] = useState(false);
 
   return (
     <>
       <div
+        draggable
+        onDragStart={(e) => setDragData(e, { type: 'folder', id: folder.id, name: folder.name })}
+        onDragOver={(e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          setDragOver(true);
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          const data = getDragData(e);
+          if (data && data.id !== folder.id && onDropOnFolder) {
+            onDropOnFolder(data);
+          }
+        }}
         onDoubleClick={onDoubleClick}
         onContextMenu={(e) => {
           e.preventDefault();
           setMenuPos({ x: e.clientX, y: e.clientY });
         }}
-        className="group relative flex flex-col p-4 bg-white rounded-xl border border-slate-200 hover:border-brand-300 hover:shadow-card-hover cursor-pointer transition-all duration-150 select-none"
+        className={clsx(
+          'group relative flex flex-col p-4 bg-white rounded-xl border cursor-pointer transition-all duration-150 select-none',
+          dragOver
+            ? 'border-brand-400 bg-brand-50 shadow-md ring-2 ring-brand-200'
+            : 'border-slate-200 hover:border-brand-300 hover:shadow-card-hover'
+        )}
       >
         <div className="flex items-start justify-between mb-3">
           <div
@@ -94,24 +139,48 @@ function FileCard({
   onClick,
   onAction,
   isTrash,
+  onDropOnItem,
 }: {
   file: DriveFile;
   onClick: () => void;
   onAction: (action: string) => void;
   isTrash?: boolean;
+  onDropOnItem?: (dragged: DragDropPayload) => void;
 }) {
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
+  const [dragOver, setDragOver] = useState(false);
   const isImage = file.mimeType.startsWith('image/');
 
   return (
     <>
       <div
+        draggable
+        onDragStart={(e) => setDragData(e, { type: 'file', id: file.id, name: file.name })}
+        onDragOver={(e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          setDragOver(true);
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          const data = getDragData(e);
+          if (data && data.id !== file.id && onDropOnItem) {
+            onDropOnItem(data);
+          }
+        }}
         onClick={onClick}
         onContextMenu={(e) => {
           e.preventDefault();
           setMenuPos({ x: e.clientX, y: e.clientY });
         }}
-        className="group relative flex flex-col bg-white rounded-xl border border-slate-200 hover:border-brand-300 hover:shadow-card-hover cursor-pointer transition-all duration-150 select-none overflow-hidden"
+        className={clsx(
+          'group relative flex flex-col bg-white rounded-xl border cursor-pointer transition-all duration-150 select-none overflow-hidden',
+          dragOver
+            ? 'border-brand-400 bg-brand-50 shadow-md ring-2 ring-brand-200'
+            : 'border-slate-200 hover:border-brand-300 hover:shadow-card-hover'
+        )}
       >
         {/* Thumbnail area */}
         <div className="aspect-video bg-slate-50 flex items-center justify-center relative overflow-hidden">
@@ -177,7 +246,7 @@ function FileCard({
   );
 }
 
-export function FileGrid({ files, folders, onFileClick, onFolderClick, onFileAction, onFolderAction, isTrash }: Props) {
+export function FileGrid({ files, folders, onFileClick, onFolderClick, onFileAction, onFolderAction, isTrash, onDropOnFolder, onDropOnItem }: Props) {
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
       {folders.map((folder) => (
@@ -186,6 +255,7 @@ export function FileGrid({ files, folders, onFileClick, onFolderClick, onFileAct
           folder={folder}
           onDoubleClick={() => onFolderClick(folder)}
           onAction={(action) => onFolderAction(action, folder)}
+          onDropOnFolder={onDropOnFolder ? (dragged) => onDropOnFolder(dragged, folder.id) : undefined}
         />
       ))}
       {files.map((file) => (
@@ -195,6 +265,7 @@ export function FileGrid({ files, folders, onFileClick, onFolderClick, onFileAct
           onClick={() => onFileClick(file)}
           onAction={(action) => onFileAction(action, file)}
           isTrash={isTrash}
+          onDropOnItem={onDropOnItem ? (dragged) => onDropOnItem(dragged, { type: 'file', id: file.id, name: file.name }) : undefined}
         />
       ))}
     </div>

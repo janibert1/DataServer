@@ -11,14 +11,22 @@ import { UploadButton } from '@/components/file/upload-button';
 import { UploadProgress } from '@/components/file/upload-progress';
 import { CreateFolderModal } from '@/components/file/create-folder-modal';
 import { RenameModal } from '@/components/file/rename-modal';
+import { AutoCreateFolderModal } from '@/components/file/auto-create-folder-modal';
+import { DragDropProvider, DragItem } from '@/components/file/drag-drop-context';
 import { showFileActions, showFolderActions } from '@/components/file/file-actions';
 import { downloadAndShareFile } from '@/lib/hooks/use-download';
+import { useMoveFile } from '@/lib/hooks/use-files';
+import { useMoveFolder, useCreateFolder } from '@/lib/hooks/use-folders';
 import type { DriveFile, DriveFolder } from '@/lib/types';
 
 export default function MyDriveScreen() {
   const [search, setSearch] = useState('');
   const [createFolderVisible, setCreateFolderVisible] = useState(false);
   const [renameItem, setRenameItem] = useState<{ id: string; name: string; type: 'file' | 'folder' } | null>(null);
+  const [autoCreateFolder, setAutoCreateFolder] = useState<{ dragged: DragItem; target: DragItem } | null>(null);
+  const moveFileMut = useMoveFile();
+  const moveFolderMut = useMoveFolder();
+  const createFolderMut = useCreateFolder();
   const { viewMode, sortField, sortDirection } = useUIStore();
   const router = useRouter();
 
@@ -102,7 +110,32 @@ export default function MyDriveScreen() {
     </View>
   );
 
+  function handleDropOnFolder(dragged: DragItem, targetFolderId: string) {
+    if (dragged.type === 'file') moveFileMut.mutate({ id: dragged.id, folderId: targetFolderId });
+    else moveFolderMut.mutate({ id: dragged.id, parentId: targetFolderId });
+  }
+
+  function handleDropOnItem(dragged: DragItem, target: DragItem) {
+    setAutoCreateFolder({ dragged, target });
+  }
+
+  function handleAutoCreateFolder(folderName: string) {
+    if (!autoCreateFolder) return;
+    const { dragged, target } = autoCreateFolder;
+    createFolderMut.mutate({ name: folderName }, {
+      onSuccess: (res: any) => {
+        const newFolderId = res.folder.id;
+        if (dragged.type === 'file') moveFileMut.mutate({ id: dragged.id, folderId: newFolderId });
+        else moveFolderMut.mutate({ id: dragged.id, parentId: newFolderId });
+        if (target.type === 'file') moveFileMut.mutate({ id: target.id, folderId: newFolderId });
+        else moveFolderMut.mutate({ id: target.id, parentId: newFolderId });
+        setAutoCreateFolder(null);
+      },
+    });
+  }
+
   return (
+    <DragDropProvider onDropOnFolder={handleDropOnFolder} onDropOnItem={handleDropOnItem}>
     <View className="flex-1 bg-slate-50">
       <FileList
         folders={search ? [] : folders}
@@ -122,6 +155,13 @@ export default function MyDriveScreen() {
       <UploadButton onCreateFolder={() => setCreateFolderVisible(true)} />
       <CreateFolderModal visible={createFolderVisible} onClose={() => setCreateFolderVisible(false)} />
       <RenameModal visible={!!renameItem} onClose={() => setRenameItem(null)} item={renameItem} />
+      <AutoCreateFolderModal
+        visible={!!autoCreateFolder}
+        onClose={() => setAutoCreateFolder(null)}
+        onConfirm={handleAutoCreateFolder}
+        isPending={createFolderMut.isPending}
+      />
     </View>
+    </DragDropProvider>
   );
 }

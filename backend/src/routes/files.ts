@@ -10,6 +10,7 @@ import { uploadToS3, getSignedDownloadUrl, deleteFromS3, buildStorageKey, getObj
 import { auditFromRequest } from '../services/auditService';
 import { checkFileAccess, getEffectivePermission } from '../services/sharingService';
 import { checkQuota, incrementUsage, decrementUsage } from '../services/quotaService';
+import { checkTotalCapacity } from '../services/storageCapacityService';
 import { AuditAction, FileStatus, SharePermission } from '@prisma/client';
 import { logger } from '../lib/logger';
 import { v4 as uuidv4 } from 'uuid';
@@ -163,6 +164,11 @@ filesRouter.post(
         const hasQuota = await checkQuota(user.id, totalSize);
         if (!hasQuota) {
           errors.push({ filename: file.originalname, error: 'Storage quota exceeded.' });
+          continue;
+        }
+        const hasCapacity = await checkTotalCapacity(totalSize);
+        if (!hasCapacity) {
+          errors.push({ filename: file.originalname, error: 'Server storage capacity exceeded.' });
           continue;
         }
 

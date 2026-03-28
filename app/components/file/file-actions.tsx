@@ -47,7 +47,14 @@ export function showFileActions(file: DriveFile, handlers: FileActionHandlers, i
     {
       text: 'Move to Trash',
       style: 'destructive',
-      onPress: () => handlers.onTrash?.(file),
+      onPress: () =>
+        showConfirm({
+          title: 'Move to Trash',
+          message: `"${file.name}" will be moved to trash. You can restore it within 30 days.`,
+          confirmText: 'Move to Trash',
+          destructive: true,
+          onConfirm: () => handlers.onTrash?.(file),
+        }),
     },
     { text: 'Cancel', style: 'cancel' },
   ]);
@@ -75,7 +82,14 @@ export function showFolderActions(folder: DriveFolder, handlers: FolderActionHan
     {
       text: 'Move to Trash',
       style: 'destructive',
-      onPress: () => handlers.onTrash?.(folder),
+      onPress: () =>
+        showConfirm({
+          title: 'Move to Trash',
+          message: `"${folder.name}" will be moved to trash. You can restore it within 30 days.`,
+          confirmText: 'Move to Trash',
+          destructive: true,
+          onConfirm: () => handlers.onTrash?.(folder),
+        }),
     },
     { text: 'Cancel', style: 'cancel' },
   ]);

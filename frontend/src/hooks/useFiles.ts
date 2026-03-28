@@ -144,6 +144,8 @@ export function useMoveFile() {
       api.put(`/files/${id}/move`, { folderId }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['files'] });
+      queryClient.invalidateQueries({ queryKey: ['folders'] });
+      queryClient.invalidateQueries({ queryKey: ['folder-contents'] });
       toast.success('File moved.');
     },
     onError: (err) => toast.error(getErrorMessage(err)),
@@ -191,8 +193,9 @@ export function useStarFile() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.post(`/files/${id}/star`),
-    onSuccess: (data, id) => {
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['files'] });
+      queryClient.invalidateQueries({ queryKey: ['folder-contents'] });
     },
     onError: (err) => toast.error(getErrorMessage(err)),
   });

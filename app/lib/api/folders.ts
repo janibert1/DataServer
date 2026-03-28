@@ -1,4 +1,4 @@
-import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api-client';
+import { apiGet, apiPost, apiPatch, apiPut, apiDelete } from '@/lib/api-client';
 import type { DriveFolder, DriveFile, FolderShare, Permission } from '@/lib/types';
 
 export function getFolders(parentId?: string | null) {
@@ -20,19 +20,19 @@ export function createFolder(name: string, parentId?: string) {
 }
 
 export function renameFolder(id: string, name: string) {
-  return apiPatch<{ folder: DriveFolder }>(`/api/folders/${id}/rename`, { name });
+  return apiPatch<{ folder: DriveFolder }>(`/api/folders/${id}`, { name });
 }
 
 export function moveFolder(id: string, parentId: string | null) {
-  return apiPatch<{ folder: DriveFolder }>(`/api/folders/${id}/move`, { parentId });
+  return apiPut<{ folder: DriveFolder }>(`/api/folders/${id}/move`, { parentId });
 }
 
 export function trashFolder(id: string) {
-  return apiDelete(`/api/folders/${id}`);
+  return apiPost(`/api/folders/${id}/trash`);
 }
 
 export function starFolder(id: string) {
-  return apiPatch<{ folder: DriveFolder }>(`/api/folders/${id}/star`);
+  return apiPost<{ folder: DriveFolder }>(`/api/folders/${id}/star`);
 }
 
 export function setFolderShareable(id: string, isShared: boolean) {

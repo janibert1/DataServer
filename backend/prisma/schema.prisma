@@ -402,12 +402,13 @@ model ContentFlag {
 }
 
 model StoragePolicy {
-  id                   String   @id @default(cuid())
-  defaultQuotaBytes    BigInt   @default(10737418240)
-  maxFileSizeBytes     BigInt   @default(2147483648)
-  allowedMimeTypes     String[] @default([])
-  blockedExtensions    String[] @default([".exe", ".bat", ".sh", ".ps1", ".msi", ".dll", ".so", ".cmd", ".vbs", ".jar"])
-  trashRetentionDays   Int      @default(30)
-  versionRetentionCount Int     @default(10)
-  updatedAt            DateTime @updatedAt
+  id                      String   @id @default(cuid())
+  defaultQuotaBytes       BigInt   @default(10737418240)
+  maxFileSizeBytes        BigInt   @default(2147483648)
+  allowedMimeTypes        String[] @default([])
+  blockedExtensions       String[] @default([".exe", ".bat", ".sh", ".ps1", ".msi", ".dll", ".so", ".cmd", ".vbs", ".jar"])
+  trashRetentionDays      Int      @default(30)
+  versionRetentionCount   Int      @default(10)
+  totalDriveCapacityBytes BigInt?
+  updatedAt               DateTime @updatedAt
 }

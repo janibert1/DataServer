@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import {
   Download, Edit2, Move, Star, StarOff, Share2, Trash2,
-  RotateCcw, Eye, History, Flag, Copy, FolderOpen, X
+  RotateCcw, Eye, Copy, FolderOpen, X
 } from 'lucide-react';
 import { DriveFile, DriveFolder } from '../../types';
 
@@ -56,10 +56,8 @@ export function FileContextMenu({ position, onClose, onAction, type, item, isTra
         { label: 'Download', icon: Download, action: 'download', divider: true },
         { label: 'Rename', icon: Edit2, action: 'rename' },
         { label: 'Move to…', icon: Move, action: 'move', divider: true },
-        { label: (item as DriveFile).isStarred ? 'Remove star' : 'Add to starred', icon: (item as DriveFile).isStarred ? StarOff : Star, action: 'star' },
-        { label: 'Version history', icon: History, action: 'versions', divider: true },
-        { label: 'Report', icon: Flag, action: 'flag' },
-        { label: 'Move to trash', icon: Trash2, action: 'trash', danger: true, divider: true },
+        { label: (item as DriveFile).isStarred ? 'Remove star' : 'Add to starred', icon: (item as DriveFile).isStarred ? StarOff : Star, action: 'star', divider: true },
+        { label: 'Move to trash', icon: Trash2, action: 'trash', danger: true },
       ];
 
   const folderMenuItems: MenuItem[] = isTrash

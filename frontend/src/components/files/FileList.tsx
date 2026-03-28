@@ -5,6 +5,7 @@ import clsx from 'clsx';
 import { DriveFile, DriveFolder, SortField, SortDir } from '../../types';
 import { FileIcon } from './FileIcon';
 import { FileContextMenu } from './FileContextMenu';
+import { DragDropPayload } from './FileGrid';
 
 interface Props {
   files: DriveFile[];
@@ -17,6 +18,8 @@ interface Props {
   sortDir: SortDir;
   onSort: (field: SortField) => void;
   isTrash?: boolean;
+  onDropOnFolder?: (dragged: DragDropPayload, targetFolderId: string) => void;
+  onDropOnItem?: (dragged: DragDropPayload, target: DragDropPayload) => void;
 }
 
 function formatBytes(bytes: string | number): string {
@@ -25,6 +28,19 @@ function formatBytes(bytes: string | number): string {
   if (n < 1024 ** 2) return `${(n / 1024).toFixed(0)} KB`;
   if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
   return `${(n / 1024 ** 3).toFixed(2)} GB`;
+}
+
+function setDragData(e: React.DragEvent, payload: DragDropPayload) {
+  e.dataTransfer.setData('application/json', JSON.stringify(payload));
+  e.dataTransfer.effectAllowed = 'move';
+}
+
+function getDragData(e: React.DragEvent): DragDropPayload | null {
+  try {
+    return JSON.parse(e.dataTransfer.getData('application/json'));
+  } catch {
+    return null;
+  }
 }
 
 function SortHeader({ label, field, current, dir, onSort }: {
@@ -55,8 +71,10 @@ function SortHeader({ label, field, current, dir, onSort }: {
 export function FileList({
   files, folders, onFileClick, onFolderClick,
   onFileAction, onFolderAction, sortBy, sortDir, onSort, isTrash,
+  onDropOnFolder, onDropOnItem,
 }: Props) {
   const [menuState, setMenuState] = useState<{ pos: { x: number; y: number }; item: DriveFile | DriveFolder; type: 'file' | 'folder' } | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
 
   const openMenu = (e: React.MouseEvent, item: DriveFile | DriveFolder, type: 'file' | 'folder') => {
     e.preventDefault();
@@ -80,7 +98,24 @@ export function FileList({
           {folders.map((folder) => (
             <tr
               key={folder.id}
-              className="hover:bg-slate-50 cursor-pointer group transition-colors"
+              draggable
+              onDragStart={(e) => setDragData(e, { type: 'folder', id: folder.id, name: folder.name })}
+              onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOverId(folder.id); }}
+              onDragLeave={() => setDragOverId((prev) => prev === folder.id ? null : prev)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragOverId(null);
+                const data = getDragData(e);
+                if (data && data.id !== folder.id && onDropOnFolder) {
+                  onDropOnFolder(data, folder.id);
+                }
+              }}
+              className={clsx(
+                'cursor-pointer group transition-colors',
+                dragOverId === folder.id
+                  ? 'bg-brand-50 ring-2 ring-inset ring-brand-300'
+                  : 'hover:bg-slate-50'
+              )}
               onDoubleClick={() => onFolderClick(folder)}
               onContextMenu={(e) => openMenu(e, folder, 'folder')}
             >
@@ -118,7 +153,24 @@ export function FileList({
           {files.map((file) => (
             <tr
               key={file.id}
-              className="hover:bg-slate-50 cursor-pointer group transition-colors"
+              draggable
+              onDragStart={(e) => setDragData(e, { type: 'file', id: file.id, name: file.name })}
+              onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOverId(file.id); }}
+              onDragLeave={() => setDragOverId((prev) => prev === file.id ? null : prev)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragOverId(null);
+                const data = getDragData(e);
+                if (data && data.id !== file.id && onDropOnItem) {
+                  onDropOnItem(data, { type: 'file', id: file.id, name: file.name });
+                }
+              }}
+              className={clsx(
+                'cursor-pointer group transition-colors',
+                dragOverId === file.id
+                  ? 'bg-brand-50 ring-2 ring-inset ring-brand-200'
+                  : 'hover:bg-slate-50'
+              )}
               onClick={() => onFileClick(file)}
               onContextMenu={(e) => openMenu(e, file, 'file')}
             >

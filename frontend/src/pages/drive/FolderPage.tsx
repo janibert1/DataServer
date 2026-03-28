@@ -1,25 +1,27 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Fragment, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Grid, List, FolderPlus, ChevronDown, Share2 } from 'lucide-react';
-import { useFolderContents, useFolder, useTrashFolder, useStarFolder } from '../../hooks/useFolders';
-import { useTrashFile, useStarFile, useFiles, useRestoreFile, useDeleteFilePermanently } from '../../hooks/useFiles';
-import { FileGrid } from '../../components/files/FileGrid';
+import { Grid, List, FolderPlus, ChevronDown, Share2, Pencil, X } from 'lucide-react';
+import { Dialog, Transition } from '@headlessui/react';
+import { useFolderContents, useFolder, useTrashFolder, useStarFolder, useMoveFolder, useRenameFolder, useCreateFolder } from '../../hooks/useFolders';
+import { useTrashFile, useStarFile, useMoveFile, useRenameFile, getFileDownloadUrl } from '../../hooks/useFiles';
+import { FileGrid, DragDropPayload } from '../../components/files/FileGrid';
 import { FileList } from '../../components/files/FileList';
 import { FilePreviewModal } from '../../components/files/FilePreviewModal';
 import { UploadDropzone, UploadButton } from '../../components/files/UploadDropzone';
 import { CreateFolderModal } from '../../components/folders/CreateFolderModal';
 import { FolderBreadcrumb } from '../../components/folders/FolderBreadcrumb';
 import { ShareModal } from '../../components/sharing/ShareModal';
+import { ConfirmDialog } from '../../components/common/ConfirmDialog';
+import { MoveModal } from '../../components/files/MoveModal';
+import { AutoCreateFolderModal } from '../../components/files/AutoCreateFolderModal';
 import { EmptyState } from '../../components/common/EmptyState';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { DriveFile, DriveFolder, ViewMode, SortField, SortDir, BreadcrumbItem } from '../../types';
-import { getFileDownloadUrl } from '../../hooks/useFiles';
 import { FolderOpen } from 'lucide-react';
 import { useAuthStore } from '../../store/authStore';
-import { Menu, Transition } from '@headlessui/react';
-import { Fragment } from 'react';
 import clsx from 'clsx';
 import { api } from '../../lib/axios';
+import toast from 'react-hot-toast';
 
 const PERMISSION_LABELS: Record<string, string> = {
   VIEWER: 'Viewer', DOWNLOADER: 'Downloader', CONTRIBUTOR: 'Contributor',
@@ -30,6 +32,47 @@ const PERMISSION_COLORS: Record<string, string> = {
   CONTRIBUTOR: 'bg-green-100 text-green-700', EDITOR: 'bg-amber-100 text-amber-700',
   OWNER: 'bg-purple-100 text-purple-700',
 };
+
+function RenameModal({
+  open, onClose, initialName, onConfirm, isPending,
+}: {
+  open: boolean; onClose: () => void; initialName: string; onConfirm: (name: string) => void; isPending: boolean;
+}) {
+  const [name, setName] = useState(initialName);
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (open) { setName(initialName); setTimeout(() => { inputRef.current?.focus(); inputRef.current?.select(); }, 100); }
+  }, [open, initialName]);
+
+  return (
+    <Transition appear show={open} as={Fragment}>
+      <Dialog as="div" className="relative z-50" onClose={onClose}>
+        <Transition.Child as={Fragment} enter="ease-out duration-200" enterFrom="opacity-0" enterTo="opacity-100" leave="ease-in duration-150" leaveFrom="opacity-100" leaveTo="opacity-0">
+          <div className="fixed inset-0 bg-black/40 backdrop-blur-sm" />
+        </Transition.Child>
+        <div className="fixed inset-0 flex items-center justify-center p-4">
+          <Transition.Child as={Fragment} enter="ease-out duration-200" enterFrom="opacity-0 scale-95" enterTo="opacity-100 scale-100" leave="ease-in duration-150" leaveFrom="opacity-100 scale-100" leaveTo="opacity-0 scale-95">
+            <Dialog.Panel className="w-full max-w-sm bg-white rounded-2xl shadow-xl p-6">
+              <div className="flex items-center justify-between mb-4">
+                <Dialog.Title className="text-base font-semibold text-slate-900 flex items-center gap-2">
+                  <Pencil className="w-4 h-4 text-brand-600" /> Rename
+                </Dialog.Title>
+                <button onClick={onClose} className="p-1 rounded-lg hover:bg-slate-100 text-slate-400"><X className="w-4 h-4" /></button>
+              </div>
+              <form onSubmit={(e) => { e.preventDefault(); if (name.trim()) onConfirm(name.trim()); }} className="space-y-4">
+                <input ref={inputRef} type="text" value={name} onChange={(e) => setName(e.target.value)} className="w-full px-3 py-2.5 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-300 focus:border-brand-400" required maxLength={255} />
+                <div className="flex gap-3">
+                  <button type="button" onClick={onClose} className="flex-1 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors">Cancel</button>
+                  <button type="submit" disabled={!name.trim() || isPending} className="flex-1 px-4 py-2 text-sm font-medium text-white bg-brand-600 rounded-lg hover:bg-brand-700 disabled:opacity-50 transition-colors">{isPending ? 'Saving…' : 'Rename'}</button>
+                </div>
+              </form>
+            </Dialog.Panel>
+          </Transition.Child>
+        </div>
+      </Dialog>
+    </Transition>
+  );
+}
 
 export function FolderPage() {
   const { folderId } = useParams<{ folderId: string }>();
@@ -43,6 +86,10 @@ export function FolderPage() {
   const [previewFile, setPreviewFile] = useState<DriveFile | null>(null);
   const [showShare, setShowShare] = useState(false);
   const [breadcrumbs, setBreadcrumbs] = useState<BreadcrumbItem[]>([]);
+  const [renameTarget, setRenameTarget] = useState<{ type: 'file' | 'folder'; id: string; name: string } | null>(null);
+  const [confirmTrash, setConfirmTrash] = useState<{ type: 'file' | 'folder'; id: string; name: string } | null>(null);
+  const [moveTarget, setMoveTarget] = useState<{ type: 'file' | 'folder'; id: string; name: string } | null>(null);
+  const [autoCreateFolder, setAutoCreateFolder] = useState<{ dragged: DragDropPayload; target: DragDropPayload } | null>(null);
 
   const { data: folderContents, isLoading } = useFolderContents(folderId ?? null, sortBy, sortDir);
   const { data: folderData } = useFolder(folderId ?? '');
@@ -50,6 +97,11 @@ export function FolderPage() {
   const starFile = useStarFile();
   const trashFolder = useTrashFolder();
   const starFolder = useStarFolder();
+  const moveFile = useMoveFile();
+  const moveFolder = useMoveFolder();
+  const renameFile = useRenameFile();
+  const renameFolder = useRenameFolder();
+  const createFolder = useCreateFolder();
 
   // Build breadcrumb chain
   useEffect(() => {
@@ -78,16 +130,19 @@ export function FolderPage() {
   const isOwner = folderData && user && folderData.ownerId === user.id;
   const canUpload = permission && ['CONTRIBUTOR', 'EDITOR', 'OWNER'].includes(permission);
 
-  const handleFileAction = async (action: string, file: DriveFile) => {
+  const handleFileAction = (action: string, file: DriveFile) => {
     switch (action) {
       case 'preview': setPreviewFile(file); break;
       case 'download': {
-        const { downloadUrl, filename } = await getFileDownloadUrl(file.id);
-        const a = document.createElement('a'); a.href = downloadUrl; a.download = filename; a.click();
+        getFileDownloadUrl(file.id).then(({ downloadUrl, filename }) => {
+          const a = document.createElement('a'); a.href = downloadUrl; a.download = filename; a.click();
+        }).catch(() => toast.error('Download failed.'));
         break;
       }
       case 'star': starFile.mutate(file.id); break;
-      case 'trash': trashFile.mutate(file.id); break;
+      case 'trash': setConfirmTrash({ type: 'file', id: file.id, name: file.name }); break;
+      case 'rename': setRenameTarget({ type: 'file', id: file.id, name: file.name }); break;
+      case 'move': setMoveTarget({ type: 'file', id: file.id, name: file.name }); break;
     }
   };
 
@@ -95,9 +150,54 @@ export function FolderPage() {
     switch (action) {
       case 'open': navigate(`/drive/folder/${folder.id}`); break;
       case 'star': starFolder.mutate(folder.id); break;
-      case 'trash': trashFolder.mutate(folder.id); break;
+      case 'trash': setConfirmTrash({ type: 'folder', id: folder.id, name: folder.name }); break;
+      case 'rename': setRenameTarget({ type: 'folder', id: folder.id, name: folder.name }); break;
+      case 'move': setMoveTarget({ type: 'folder', id: folder.id, name: folder.name }); break;
+      case 'share': setShowShare(true); break;
     }
   };
+
+  function handleConfirmTrash() {
+    if (!confirmTrash) return;
+    if (confirmTrash.type === 'file') trashFile.mutate(confirmTrash.id, { onSuccess: () => setConfirmTrash(null) });
+    else trashFolder.mutate(confirmTrash.id, { onSuccess: () => setConfirmTrash(null) });
+  }
+
+  function handleRename(name: string) {
+    if (!renameTarget) return;
+    if (renameTarget.type === 'file') renameFile.mutate({ id: renameTarget.id, name }, { onSuccess: () => setRenameTarget(null) });
+    else renameFolder.mutate({ id: renameTarget.id, name }, { onSuccess: () => setRenameTarget(null) });
+  }
+
+  function handleMoveConfirm(targetFolderId: string | null) {
+    if (!moveTarget) return;
+    if (moveTarget.type === 'file') moveFile.mutate({ id: moveTarget.id, folderId: targetFolderId }, { onSuccess: () => setMoveTarget(null) });
+    else moveFolder.mutate({ id: moveTarget.id, parentId: targetFolderId }, { onSuccess: () => setMoveTarget(null) });
+  }
+
+  function handleDropOnFolder(dragged: DragDropPayload, targetFolderId: string) {
+    if (dragged.type === 'file') moveFile.mutate({ id: dragged.id, folderId: targetFolderId });
+    else moveFolder.mutate({ id: dragged.id, parentId: targetFolderId });
+  }
+
+  function handleDropOnItem(dragged: DragDropPayload, target: DragDropPayload) {
+    setAutoCreateFolder({ dragged, target });
+  }
+
+  async function handleAutoCreateFolder(folderName: string) {
+    if (!autoCreateFolder) return;
+    const { dragged, target } = autoCreateFolder;
+    createFolder.mutate({ name: folderName, parentId: folderId ?? null }, {
+      onSuccess: (res) => {
+        const newFolderId = res.data.folder.id;
+        if (dragged.type === 'file') moveFile.mutate({ id: dragged.id, folderId: newFolderId });
+        else moveFolder.mutate({ id: dragged.id, parentId: newFolderId });
+        if (target.type === 'file') moveFile.mutate({ id: target.id, folderId: newFolderId });
+        else moveFolder.mutate({ id: target.id, parentId: newFolderId });
+        setAutoCreateFolder(null);
+      },
+    });
+  }
 
   const previewIndex = previewFile ? files.findIndex((f: any) => f.id === previewFile.id) : -1;
   const isEmpty = folders.length === 0 && files.length === 0;
@@ -162,6 +262,8 @@ export function FolderPage() {
             onFolderClick={(f) => navigate(`/drive/folder/${f.id}`)}
             onFileAction={handleFileAction}
             onFolderAction={handleFolderAction}
+            onDropOnFolder={handleDropOnFolder}
+            onDropOnItem={handleDropOnItem}
           />
         ) : (
           <FileList
@@ -177,6 +279,8 @@ export function FolderPage() {
               if (field === sortBy) setSortDir((d) => d === 'asc' ? 'desc' : 'asc');
               else { setSortBy(field); setSortDir('asc'); }
             }}
+            onDropOnFolder={handleDropOnFolder}
+            onDropOnItem={handleDropOnItem}
           />
         )}
       </div>
@@ -197,6 +301,41 @@ export function FolderPage() {
       {showShare && folderId && (
         <ShareModal open={showShare} onClose={() => setShowShare(false)} folderId={folderId} />
       )}
+
+      <RenameModal
+        open={!!renameTarget}
+        onClose={() => setRenameTarget(null)}
+        initialName={renameTarget?.name ?? ''}
+        onConfirm={handleRename}
+        isPending={renameFile.isPending || renameFolder.isPending}
+      />
+
+      <MoveModal
+        open={!!moveTarget}
+        onClose={() => setMoveTarget(null)}
+        onConfirm={handleMoveConfirm}
+        isPending={moveFile.isPending || moveFolder.isPending}
+        excludeIds={moveTarget ? [moveTarget.id] : []}
+        itemName={moveTarget?.name}
+      />
+
+      <AutoCreateFolderModal
+        open={!!autoCreateFolder}
+        onClose={() => setAutoCreateFolder(null)}
+        onConfirm={handleAutoCreateFolder}
+        isPending={createFolder.isPending}
+      />
+
+      <ConfirmDialog
+        open={!!confirmTrash}
+        onClose={() => setConfirmTrash(null)}
+        onConfirm={handleConfirmTrash}
+        title={`Move "${confirmTrash?.name}" to trash?`}
+        description="You can restore it from the trash within 30 days."
+        confirmLabel="Move to trash"
+        variant="danger"
+        isLoading={trashFile.isPending || trashFolder.isPending}
+      />
     </UploadDropzone>
   );
 }

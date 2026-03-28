@@ -76,6 +76,13 @@ export function apiPatch<T = unknown>(path: string, body?: unknown) {
   });
 }
 
+export function apiPut<T = unknown>(path: string, body?: unknown) {
+  return apiFetch<T>(path, {
+    method: 'PUT',
+    body: body ? JSON.stringify(body) : undefined,
+  });
+}
+
 export function apiDelete<T = unknown>(path: string) {
   return apiFetch<T>(path, { method: 'DELETE' });
 }

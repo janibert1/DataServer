@@ -171,6 +171,7 @@ export interface StoragePolicy {
   blockedExtensions: string[];
   trashRetentionDays: number;
   versionRetentionCount: number;
+  totalDriveCapacityBytes: string | null;
 }
 
 // ─── API Response types ──────────────────────────────────────

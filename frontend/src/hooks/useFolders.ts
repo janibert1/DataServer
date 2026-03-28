@@ -115,7 +115,10 @@ export function useStarFolder() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.post(`/folders/${id}/star`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['folders'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['folders'] });
+      queryClient.invalidateQueries({ queryKey: ['folder-contents'] });
+    },
     onError: (err) => toast.error(getErrorMessage(err)),
   });
 }

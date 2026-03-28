@@ -1,4 +1,4 @@
-import { apiGet, apiPatch, apiDelete, apiPost, apiFetch } from '@/lib/api-client';
+import { apiGet, apiPatch, apiPut, apiDelete, apiPost, apiFetch } from '@/lib/api-client';
 import { useAuthStore } from '@/stores/auth-store';
 import type { DriveFile, FileVersion } from '@/lib/types';
 
@@ -31,31 +31,31 @@ export function getFilePreviewUrl(id: string) {
 }
 
 export function renameFile(id: string, name: string) {
-  return apiPatch<{ file: DriveFile }>(`/api/files/${id}/rename`, { name });
+  return apiPatch<{ file: DriveFile }>(`/api/files/${id}`, { name });
 }
 
 export function moveFile(id: string, folderId: string | null) {
-  return apiPatch<{ file: DriveFile }>(`/api/files/${id}/move`, { folderId });
+  return apiPut<{ file: DriveFile }>(`/api/files/${id}/move`, { folderId });
 }
 
 export function starFile(id: string) {
-  return apiPatch<{ file: DriveFile }>(`/api/files/${id}/star`);
+  return apiPost<{ file: DriveFile }>(`/api/files/${id}/star`);
 }
 
 export function trashFile(id: string) {
-  return apiDelete(`/api/files/${id}`);
+  return apiPost(`/api/files/${id}/trash`);
 }
 
 export function permanentDeleteFile(id: string) {
-  return apiDelete(`/api/files/${id}/permanent`);
+  return apiDelete(`/api/files/${id}`);
 }
 
 export function restoreFile(id: string) {
-  return apiPost(`/api/files/restore/${id}`);
+  return apiPost(`/api/files/${id}/restore`);
 }
 
 export function emptyTrash() {
-  return apiDelete('/api/files/trash/empty');
+  return apiPost('/api/files/empty-trash');
 }
 
 export function flagFile(id: string, reason: string) {

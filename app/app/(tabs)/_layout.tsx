@@ -2,28 +2,28 @@ import { Tabs, useRouter } from 'expo-router';
 import { TouchableOpacity, View, Text } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { useNotifications } from '@/lib/hooks/use-notifications';
 import { useAuthStore } from '@/stores/auth-store';
+import { useUploadStore } from '@/stores/upload-store';
 import { Avatar } from '@/components/ui/avatar';
 
 function HeaderRight() {
   const router = useRouter();
-  const { data } = useNotifications();
   const { user } = useAuthStore();
-  const unread = data?.unreadCount ?? 0;
+  const { uploads, setVisible } = useUploadStore();
+  const activeCount = uploads.filter((u) => u.status === 'uploading' || u.status === 'pending').length;
 
   return (
     <View className="flex-row items-center gap-3 mr-4">
       <TouchableOpacity
-        onPress={() => router.push('/settings')}
+        onPress={() => setVisible(true)}
         className="relative"
       >
-        {unread > 0 && (
-          <View className="absolute -top-1 -right-1 bg-red-500 rounded-full w-4 h-4 items-center justify-center z-10">
-            <Text className="text-[10px] text-white font-bold">{unread > 9 ? '9+' : unread}</Text>
+        {activeCount > 0 && (
+          <View className="absolute -top-1 -right-1 bg-blue-500 rounded-full w-4 h-4 items-center justify-center z-10">
+            <Text className="text-[10px] text-white font-bold">{activeCount > 9 ? '9+' : activeCount}</Text>
           </View>
         )}
-        <Ionicons name="notifications-outline" size={22} color="#475569" />
+        <Ionicons name="cloud-upload-outline" size={22} color="#475569" />
       </TouchableOpacity>
       <TouchableOpacity onPress={() => router.push('/settings')}>
         <Avatar url={user?.avatarUrl} name={user?.displayName ?? ''} size={30} />

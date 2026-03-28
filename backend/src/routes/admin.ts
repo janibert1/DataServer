@@ -5,6 +5,13 @@ import { prisma } from '../lib/prisma';
 import { auditFromRequest } from '../services/auditService';
 import { createPlatformInvitation, revokeInvitation } from '../services/invitationService';
 import { AuditAction, UserStatus, InvitationType } from '@prisma/client';
+import {
+  getPhysicalDiskSpace,
+  getTotalOccupiedSpace,
+  getTotalAllocatedQuota,
+  validateCapacitySetting,
+  proportionallyReduceQuotas,
+} from '../services/storageCapacityService';
 
 export const adminRouter = Router();
 adminRouter.use(requireAuth, requireAdmin);
@@ -324,6 +331,7 @@ adminRouter.get('/policy', async (_req: Request, res: Response) => {
       ...policy,
       defaultQuotaBytes: policy.defaultQuotaBytes.toString(),
       maxFileSizeBytes: policy.maxFileSizeBytes.toString(),
+      totalDriveCapacityBytes: policy.totalDriveCapacityBytes?.toString() ?? null,
     },
   });
 });
@@ -333,6 +341,7 @@ adminRouter.patch('/policy', async (req: Request, res: Response) => {
   const {
     defaultQuotaBytes, maxFileSizeBytes, allowedMimeTypes,
     blockedExtensions, trashRetentionDays, versionRetentionCount,
+    totalDriveCapacityBytes,
   } = req.body;
 
   const data: any = {};
@@ -342,6 +351,20 @@ adminRouter.patch('/policy', async (req: Request, res: Response) => {
   if (blockedExtensions !== undefined) data.blockedExtensions = blockedExtensions;
   if (trashRetentionDays !== undefined) data.trashRetentionDays = parseInt(trashRetentionDays);
   if (versionRetentionCount !== undefined) data.versionRetentionCount = parseInt(versionRetentionCount);
+
+  if (totalDriveCapacityBytes !== undefined) {
+    if (totalDriveCapacityBytes === null || totalDriveCapacityBytes === '') {
+      data.totalDriveCapacityBytes = null;
+    } else {
+      const capacityBig = BigInt(totalDriveCapacityBytes);
+      const validation = await validateCapacitySetting(capacityBig);
+      if (!validation.valid) {
+        res.status(400).json({ error: validation.error });
+        return;
+      }
+      data.totalDriveCapacityBytes = capacityBig;
+    }
+  }
 
   let policy = await prisma.storagePolicy.findFirst();
   if (!policy) {
@@ -356,5 +379,60 @@ adminRouter.patch('/policy', async (req: Request, res: Response) => {
     details: { performedBy: admin.id, changes: req.body },
   });
 
-  res.json({ message: 'Policy updated.', policy });
+  res.json({
+    message: 'Policy updated.',
+    policy: {
+      ...policy,
+      defaultQuotaBytes: policy.defaultQuotaBytes.toString(),
+      maxFileSizeBytes: policy.maxFileSizeBytes.toString(),
+      totalDriveCapacityBytes: policy.totalDriveCapacityBytes?.toString() ?? null,
+    },
+  });
+});
+
+// ─── Storage overview ────────────────────────────────────────
+
+adminRouter.get('/storage-overview', async (_req: Request, res: Response) => {
+  const [occupied, allocated, policy] = await Promise.all([
+    getTotalOccupiedSpace(),
+    getTotalAllocatedQuota(),
+    prisma.storagePolicy.findFirst(),
+  ]);
+
+  let disk = null;
+  try {
+    const d = getPhysicalDiskSpace();
+    disk = { totalBytes: d.totalBytes.toString(), availableBytes: d.availableBytes.toString() };
+  } catch { /* non-local storage, skip */ }
+
+  res.json({
+    disk,
+    capacityBytes: policy?.totalDriveCapacityBytes?.toString() ?? null,
+    occupiedBytes: occupied.toString(),
+    allocatedQuotaBytes: allocated.toString(),
+  });
+});
+
+// ─── Redistribute quotas ────────────────────────────────────
+
+adminRouter.post('/redistribute-quotas', async (req: Request, res: Response) => {
+  const admin = req.user as any;
+  const { targetCapacityBytes, preview } = req.body;
+
+  if (!targetCapacityBytes) {
+    res.status(400).json({ error: 'targetCapacityBytes is required.' });
+    return;
+  }
+
+  const result = await proportionallyReduceQuotas(BigInt(targetCapacityBytes), preview === true);
+
+  if (!preview && result.adjusted) {
+    await auditFromRequest(req, AuditAction.ADMIN_ACTION, {
+      entityType: 'StoragePolicy',
+      entityId: 'quota-redistribution',
+      details: { performedBy: admin.id, targetCapacityBytes, usersAffected: result.users.length },
+    });
+  }
+
+  res.json(result);
 });

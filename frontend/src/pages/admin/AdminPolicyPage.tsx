@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Settings2, Save, X, Plus, Info } from 'lucide-react';
+import { Settings2, Save, X, Plus, Info, HardDrive, AlertTriangle } from 'lucide-react';
 import { api, getErrorMessage } from '../../lib/axios';
 import { StoragePolicy } from '../../types';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
@@ -25,6 +25,34 @@ function useUpdatePolicy() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['admin', 'policy'] });
       toast.success('Policy updated.');
+    },
+    onError: (err) => toast.error(getErrorMessage(err)),
+  });
+}
+
+function useStorageOverview() {
+  return useQuery({
+    queryKey: ['admin', 'storage-overview'],
+    queryFn: async () => {
+      const res = await api.get('/admin/storage-overview');
+      return res.data as {
+        disk: { totalBytes: string; availableBytes: string } | null;
+        capacityBytes: string | null;
+        occupiedBytes: string;
+        allocatedQuotaBytes: string;
+      };
+    },
+  });
+}
+
+function useRedistributeQuotas() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: { targetCapacityBytes: string; preview?: boolean }) =>
+      api.post('/admin/redistribute-quotas', data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'storage-overview'] });
+      toast.success('Quotas redistributed.');
     },
     onError: (err) => toast.error(getErrorMessage(err)),
   });
@@ -156,12 +184,17 @@ function NumberField({
 export function AdminPolicyPage() {
   const { data: policy, isLoading } = usePolicy();
   const updatePolicy = useUpdatePolicy();
+  const { data: storageOverview } = useStorageOverview();
+  const redistributeQuotas = useRedistributeQuotas();
 
   const [defaultQuotaGB, setDefaultQuotaGB] = useState('');
   const [maxFileSizeGB, setMaxFileSizeGB] = useState('');
   const [blockedExtensions, setBlockedExtensions] = useState<string[]>([]);
   const [trashRetentionDays, setTrashRetentionDays] = useState('');
   const [versionRetentionCount, setVersionRetentionCount] = useState('');
+  const [capacityGB, setCapacityGB] = useState('');
+  const [capacityEnabled, setCapacityEnabled] = useState(false);
+  const [showRedistributeConfirm, setShowRedistributeConfirm] = useState(false);
 
   useEffect(() => {
     if (policy) {
@@ -170,6 +203,13 @@ export function AdminPolicyPage() {
       setBlockedExtensions(policy.blockedExtensions ?? []);
       setTrashRetentionDays(policy.trashRetentionDays?.toString() ?? '30');
       setVersionRetentionCount(policy.versionRetentionCount?.toString() ?? '5');
+      if (policy.totalDriveCapacityBytes) {
+        setCapacityEnabled(true);
+        setCapacityGB(bytesToGB(policy.totalDriveCapacityBytes));
+      } else {
+        setCapacityEnabled(false);
+        setCapacityGB('');
+      }
     }
   }, [policy]);
 
@@ -185,8 +225,15 @@ export function AdminPolicyPage() {
       blockedExtensions,
       trashRetentionDays: parseInt(trashRetentionDays),
       versionRetentionCount: parseInt(versionRetentionCount),
-    });
+      totalDriveCapacityBytes: capacityEnabled && capacityGB ? gbToBytes(capacityGB) : null,
+    } as any);
   };
+
+  const allocatedGB = storageOverview ? (parseInt(storageOverview.allocatedQuotaBytes) / 1024 ** 3).toFixed(2) : null;
+  const occupiedGB = storageOverview ? (parseInt(storageOverview.occupiedBytes) / 1024 ** 3).toFixed(2) : null;
+  const diskTotalGB = storageOverview?.disk ? (parseInt(storageOverview.disk.totalBytes) / 1024 ** 3).toFixed(1) : null;
+  const diskAvailGB = storageOverview?.disk ? (parseInt(storageOverview.disk.availableBytes) / 1024 ** 3).toFixed(1) : null;
+  const capacityExceedsAllocated = capacityEnabled && capacityGB && allocatedGB && parseFloat(capacityGB) < parseFloat(allocatedGB);
 
   return (
     <div className="p-6 space-y-6">
@@ -262,6 +309,111 @@ export function AdminPolicyPage() {
                 />
               </FormSection>
 
+              {/* Server storage limit */}
+              <FormSection title="Server Storage Limit">
+                <div className="flex items-center gap-3">
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={capacityEnabled}
+                      onChange={(e) => {
+                        setCapacityEnabled(e.target.checked);
+                        if (!e.target.checked) setCapacityGB('');
+                      }}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-slate-200 peer-focus:ring-2 peer-focus:ring-brand-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-brand-600"></div>
+                  </label>
+                  <span className="text-sm font-medium text-slate-700">Enable server-wide storage limit</span>
+                </div>
+                <p className="text-xs text-slate-400">Limit the total amount of data stored across all users. A 2 GB buffer is reserved for system use.</p>
+
+                {capacityEnabled && (
+                  <>
+                    <NumberField
+                      label="Total drive capacity"
+                      description="Maximum total storage for all users combined"
+                      value={capacityGB}
+                      onChange={setCapacityGB}
+                      min={1}
+                      step={1}
+                      suffix="GB"
+                    />
+
+                    {storageOverview && (
+                      <div className="grid grid-cols-2 gap-3 text-sm">
+                        {diskTotalGB && (
+                          <div className="p-3 bg-slate-50 rounded-lg">
+                            <div className="flex items-center gap-1.5 text-slate-500 mb-1">
+                              <HardDrive className="w-3.5 h-3.5" />
+                              <span className="text-xs font-medium">Physical disk</span>
+                            </div>
+                            <p className="font-semibold text-slate-800">{diskTotalGB} GB total</p>
+                            <p className="text-xs text-slate-400">{diskAvailGB} GB available</p>
+                          </div>
+                        )}
+                        <div className="p-3 bg-slate-50 rounded-lg">
+                          <div className="text-xs font-medium text-slate-500 mb-1">Currently occupied</div>
+                          <p className="font-semibold text-slate-800">{occupiedGB} GB</p>
+                        </div>
+                        <div className="p-3 bg-slate-50 rounded-lg">
+                          <div className="text-xs font-medium text-slate-500 mb-1">Total allocated quotas</div>
+                          <p className="font-semibold text-slate-800">{allocatedGB} GB</p>
+                        </div>
+                      </div>
+                    )}
+
+                    {capacityExceedsAllocated && (
+                      <div className="flex items-start gap-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                        <div>
+                          <p className="text-sm font-medium text-amber-800">Capacity below total allocated quotas</p>
+                          <p className="text-xs text-amber-600 mt-0.5">
+                            Saving this will not automatically reduce user quotas. Use the redistribute button below to proportionally scale them down.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => setShowRedistributeConfirm(true)}
+                            className="mt-2 px-3 py-1.5 text-xs font-medium text-amber-800 bg-amber-100 rounded-md hover:bg-amber-200 transition-colors"
+                          >
+                            Preview redistribution
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {showRedistributeConfirm && capacityGB && (
+                      <div className="p-4 bg-red-50 border border-red-200 rounded-lg space-y-3">
+                        <p className="text-sm font-medium text-red-800">
+                          This will proportionally reduce all user quotas to fit within {capacityGB} GB.
+                          No user's quota will go below their actual used space.
+                        </p>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              redistributeQuotas.mutate({ targetCapacityBytes: gbToBytes(capacityGB) });
+                              setShowRedistributeConfirm(false);
+                            }}
+                            disabled={redistributeQuotas.isPending}
+                            className="px-3 py-1.5 text-xs font-medium text-white bg-red-600 rounded-md hover:bg-red-700 disabled:opacity-50 transition-colors"
+                          >
+                            {redistributeQuotas.isPending ? 'Redistributing...' : 'Confirm redistribution'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setShowRedistributeConfirm(false)}
+                            className="px-3 py-1.5 text-xs font-medium text-slate-600 bg-white border border-slate-300 rounded-md hover:bg-slate-50 transition-colors"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </FormSection>
+
               {/* Info banner */}
               <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl">
                 <Info className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
@@ -286,6 +438,13 @@ export function AdminPolicyPage() {
                     setBlockedExtensions(policy.blockedExtensions ?? []);
                     setTrashRetentionDays(policy.trashRetentionDays?.toString() ?? '30');
                     setVersionRetentionCount(policy.versionRetentionCount?.toString() ?? '5');
+                    if (policy.totalDriveCapacityBytes) {
+                      setCapacityEnabled(true);
+                      setCapacityGB(bytesToGB(policy.totalDriveCapacityBytes));
+                    } else {
+                      setCapacityEnabled(false);
+                      setCapacityGB('');
+                    }
                   }
                 }}
                 disabled={updatePolicy.isPending}

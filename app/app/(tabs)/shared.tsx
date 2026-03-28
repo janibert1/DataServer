@@ -8,9 +8,26 @@ import { PermissionBadge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/ui/empty-state';
 import { FolderIcon } from '@/components/file/file-icon';
 import { formatDate } from '@/lib/format';
-import type { FolderShare } from '@/lib/types';
+import type { Permission } from '@/lib/types';
 
-function ShareRow({ item, onPress }: { item: FolderShare; onPress: () => void }) {
+interface SharedFolderItem {
+  shareId: string;
+  permission: Permission;
+  canReshare: boolean;
+  sharedAt: string;
+  folder: {
+    id: string;
+    name: string;
+    path?: string;
+    color?: string | null;
+    isShared?: boolean;
+    updatedAt?: string;
+    fileCount?: number;
+    owner?: { id: string; displayName: string; avatarUrl: string | null };
+  };
+}
+
+function ShareRow({ item, onPress }: { item: SharedFolderItem; onPress: () => void }) {
   return (
     <TouchableOpacity
       style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' }}
@@ -23,13 +40,13 @@ function ShareRow({ item, onPress }: { item: FolderShare; onPress: () => void })
           {item.folder?.name ?? 'Shared Folder'}
         </Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 }}>
-          {item.owner && (
+          {item.folder?.owner && (
             <Text style={{ fontSize: 12, color: '#94a3b8' }}>
-              from {item.owner.displayName}
+              from {item.folder.owner.displayName}
             </Text>
           )}
           <Text style={{ fontSize: 12, color: '#cbd5e1' }}>·</Text>
-          <Text style={{ fontSize: 12, color: '#94a3b8' }}>{formatDate(item.createdAt)}</Text>
+          <Text style={{ fontSize: 12, color: '#94a3b8' }}>{formatDate(item.sharedAt)}</Text>
         </View>
       </View>
       <PermissionBadge permission={item.permission} />
@@ -44,16 +61,16 @@ export default function SharedScreen() {
     queryFn: getSharedWithMe,
   });
 
-  const shares = data?.shares ?? [];
+  const shares = (data?.shares ?? []) as SharedFolderItem[];
 
-  const renderItem = useCallback(({ item }: { item: FolderShare }) => (
-    <ShareRow item={item} onPress={() => router.push(`/folder/${item.folderId}`)} />
+  const renderItem = useCallback(({ item }: { item: SharedFolderItem }) => (
+    <ShareRow item={item} onPress={() => router.push(`/folder/${item.folder?.id}`)} />
   ), [router]);
 
   return (
     <FlatList
       data={shares}
-      keyExtractor={(item: FolderShare) => item.id}
+      keyExtractor={(item: SharedFolderItem) => item.shareId}
       style={{ flex: 1, backgroundColor: '#f8fafc' }}
       refreshControl={
         <RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor="#2563eb" />

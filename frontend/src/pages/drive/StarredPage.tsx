@@ -4,9 +4,10 @@ import { Star } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
 import { DriveFile, DriveFolder, SortField, SortDir } from '../../types';
-import { useStarredFiles, useTrashFile, useStarFile, getFileDownloadUrl } from '../../hooks/useFiles';
-import { useStarFolder, useTrashFolder } from '../../hooks/useFolders';
+import { useStarredFiles, useTrashFile, useStarFile, useMoveFile, getFileDownloadUrl } from '../../hooks/useFiles';
+import { useStarFolder, useTrashFolder, useMoveFolder } from '../../hooks/useFolders';
 import { api } from '../../lib/axios';
+import { MoveModal } from '../../components/files/MoveModal';
 import { FileList } from '../../components/files/FileList';
 import { FileGrid } from '../../components/files/FileGrid';
 import { FilePreviewModal } from '../../components/files/FilePreviewModal';
@@ -39,6 +40,9 @@ export function StarredPage() {
   const trashFolder = useTrashFolder();
   const starFile = useStarFile();
   const starFolder = useStarFolder();
+  const moveFile = useMoveFile();
+  const moveFolder = useMoveFolder();
+  const [moveTarget, setMoveTarget] = useState<{ type: 'file' | 'folder'; id: string; name: string } | null>(null);
 
   const isLoading = filesLoading || foldersLoading;
   const files = starredFiles ?? [];
@@ -58,12 +62,20 @@ export function StarredPage() {
         .catch(() => toast.error('Download failed.'));
     } else if (action === 'star') starFile.mutate(file.id);
     else if (action === 'trash') trashFile.mutate(file.id);
+    else if (action === 'move') setMoveTarget({ type: 'file', id: file.id, name: file.name });
   }
 
   function handleFolderAction(action: string, folder: DriveFolder) {
     if (action === 'open') navigate(`/drive/folder/${folder.id}`);
     else if (action === 'star') starFolder.mutate(folder.id);
     else if (action === 'trash') trashFolder.mutate(folder.id);
+    else if (action === 'move') setMoveTarget({ type: 'folder', id: folder.id, name: folder.name });
+  }
+
+  function handleMoveConfirm(targetFolderId: string | null) {
+    if (!moveTarget) return;
+    if (moveTarget.type === 'file') moveFile.mutate({ id: moveTarget.id, folderId: targetFolderId }, { onSuccess: () => setMoveTarget(null) });
+    else moveFolder.mutate({ id: moveTarget.id, parentId: targetFolderId }, { onSuccess: () => setMoveTarget(null) });
   }
 
   return (
@@ -123,6 +135,15 @@ export function StarredPage() {
           onSort={handleSort}
         />
       )}
+
+      <MoveModal
+        open={!!moveTarget}
+        onClose={() => setMoveTarget(null)}
+        onConfirm={handleMoveConfirm}
+        isPending={moveFile.isPending || moveFolder.isPending}
+        excludeIds={moveTarget ? [moveTarget.id] : []}
+        itemName={moveTarget?.name}
+      />
 
       {previewFile && (() => {
         const previewIndex = files.findIndex((f) => f.id === previewFile.id);

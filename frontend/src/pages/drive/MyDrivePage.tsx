@@ -6,13 +6,12 @@ import {
 } from 'lucide-react';
 import clsx from 'clsx';
 import { DriveFile, DriveFolder, SortField, SortDir, ViewMode } from '../../types';
-import { useFolders } from '../../hooks/useFolders';
+import { useFolders, useCreateFolder, useMoveFolder, useStarFolder, useTrashFolder, useRenameFolder } from '../../hooks/useFolders';
 import {
   useFiles, useRecentFiles, useTrashFile, useStarFile,
-  useRenameFile, useDeleteFilePermanently, getFileDownloadUrl
+  useRenameFile, useDeleteFilePermanently, useMoveFile, getFileDownloadUrl
 } from '../../hooks/useFiles';
-import { useTrashFolder, useStarFolder, useRenameFolder } from '../../hooks/useFolders';
-import { FileGrid } from '../../components/files/FileGrid';
+import { FileGrid, DragDropPayload } from '../../components/files/FileGrid';
 import { FileList } from '../../components/files/FileList';
 import { FilePreviewModal } from '../../components/files/FilePreviewModal';
 import { UploadDropzone, UploadButton } from '../../components/files/UploadDropzone';
@@ -21,6 +20,8 @@ import { ShareModal } from '../../components/sharing/ShareModal';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog';
 import { EmptyState } from '../../components/common/EmptyState';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
+import { MoveModal } from '../../components/files/MoveModal';
+import { AutoCreateFolderModal } from '../../components/files/AutoCreateFolderModal';
 import { FileIcon } from '../../components/files/FileIcon';
 import { formatDistanceToNow } from 'date-fns';
 import toast from 'react-hot-toast';
@@ -161,6 +162,8 @@ export function MyDrivePage() {
   const [renameTarget, setRenameTarget] = useState<{ type: 'file' | 'folder'; id: string; name: string } | null>(null);
   const [confirmTrash, setConfirmTrash] = useState<{ type: 'file' | 'folder'; id: string; name: string } | null>(null);
   const [confirmDeleteFile, setConfirmDeleteFile] = useState<DriveFile | null>(null);
+  const [moveTarget, setMoveTarget] = useState<{ type: 'file' | 'folder'; id: string; name: string } | null>(null);
+  const [autoCreateFolder, setAutoCreateFolder] = useState<{ dragged: DragDropPayload; target: DragDropPayload } | null>(null);
 
   const { data: foldersData, isLoading: foldersLoading } = useFolders(null);
   const { data: filesData, isLoading: filesLoading } = useFiles({ folderId: null, sortBy, sortDir });
@@ -173,6 +176,9 @@ export function MyDrivePage() {
   const renameFile = useRenameFile();
   const renameFolder = useRenameFolder();
   const deleteFile = useDeleteFilePermanently();
+  const moveFile = useMoveFile();
+  const moveFolder = useMoveFolder();
+  const createFolder = useCreateFolder();
 
   const folders = foldersData ?? [];
   const files = filesData?.files ?? [];
@@ -201,6 +207,7 @@ export function MyDrivePage() {
     else if (action === 'star') starFile.mutate(file.id);
     else if (action === 'trash') setConfirmTrash({ type: 'file', id: file.id, name: file.name });
     else if (action === 'delete') setConfirmDeleteFile(file);
+    else if (action === 'move') setMoveTarget({ type: 'file', id: file.id, name: file.name });
   }
 
   function handleFolderAction(action: string, folder: DriveFolder) {
@@ -209,6 +216,7 @@ export function MyDrivePage() {
     else if (action === 'star') starFolder.mutate(folder.id);
     else if (action === 'trash') setConfirmTrash({ type: 'folder', id: folder.id, name: folder.name });
     else if (action === 'share') setShareFolder(folder);
+    else if (action === 'move') setMoveTarget({ type: 'folder', id: folder.id, name: folder.name });
   }
 
   function handleConfirmTrash() {
@@ -227,6 +235,49 @@ export function MyDrivePage() {
     } else {
       renameFolder.mutate({ id: renameTarget.id, name }, { onSuccess: () => setRenameTarget(null) });
     }
+  }
+
+  function handleMoveConfirm(targetFolderId: string | null) {
+    if (!moveTarget) return;
+    if (moveTarget.type === 'file') {
+      moveFile.mutate({ id: moveTarget.id, folderId: targetFolderId }, { onSuccess: () => setMoveTarget(null) });
+    } else {
+      moveFolder.mutate({ id: moveTarget.id, parentId: targetFolderId }, { onSuccess: () => setMoveTarget(null) });
+    }
+  }
+
+  function handleDropOnFolder(dragged: DragDropPayload, targetFolderId: string) {
+    if (dragged.type === 'file') {
+      moveFile.mutate({ id: dragged.id, folderId: targetFolderId });
+    } else {
+      moveFolder.mutate({ id: dragged.id, parentId: targetFolderId });
+    }
+  }
+
+  function handleDropOnItem(dragged: DragDropPayload, target: DragDropPayload) {
+    setAutoCreateFolder({ dragged, target });
+  }
+
+  async function handleAutoCreateFolder(folderName: string) {
+    if (!autoCreateFolder) return;
+    const { dragged, target } = autoCreateFolder;
+    createFolder.mutate({ name: folderName, parentId: null }, {
+      onSuccess: (res) => {
+        const newFolderId = res.data.folder.id;
+        // Move both items into the new folder
+        if (dragged.type === 'file') {
+          moveFile.mutate({ id: dragged.id, folderId: newFolderId });
+        } else {
+          moveFolder.mutate({ id: dragged.id, parentId: newFolderId });
+        }
+        if (target.type === 'file') {
+          moveFile.mutate({ id: target.id, folderId: newFolderId });
+        } else {
+          moveFolder.mutate({ id: target.id, parentId: newFolderId });
+        }
+        setAutoCreateFolder(null);
+      },
+    });
   }
 
   const currentSortLabel = SORT_OPTIONS.find((o) => o.field === sortBy)?.label ?? 'Sort';
@@ -357,6 +408,8 @@ export function MyDrivePage() {
             onFolderClick={(folder) => navigate(`/drive/folder/${folder.id}`)}
             onFileAction={handleFileAction}
             onFolderAction={handleFolderAction}
+            onDropOnFolder={handleDropOnFolder}
+            onDropOnItem={handleDropOnItem}
           />
         ) : (
           <FileList
@@ -369,6 +422,8 @@ export function MyDrivePage() {
             sortBy={sortBy}
             sortDir={sortDir}
             onSort={handleSort}
+            onDropOnFolder={handleDropOnFolder}
+            onDropOnItem={handleDropOnItem}
           />
         )}
       </div>
@@ -401,6 +456,22 @@ export function MyDrivePage() {
         initialName={renameTarget?.name ?? ''}
         onConfirm={handleRename}
         isPending={renameFile.isPending || renameFolder.isPending}
+      />
+
+      <MoveModal
+        open={!!moveTarget}
+        onClose={() => setMoveTarget(null)}
+        onConfirm={handleMoveConfirm}
+        isPending={moveFile.isPending || moveFolder.isPending}
+        excludeIds={moveTarget ? [moveTarget.id] : []}
+        itemName={moveTarget?.name}
+      />
+
+      <AutoCreateFolderModal
+        open={!!autoCreateFolder}
+        onClose={() => setAutoCreateFolder(null)}
+        onConfirm={handleAutoCreateFolder}
+        isPending={createFolder.isPending}
       />
 
       <ConfirmDialog
