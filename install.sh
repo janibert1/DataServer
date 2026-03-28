@@ -289,7 +289,7 @@ Funnel = Public.  Anyone with the URL can access." \
   [[ -z "$TS_HOSTNAME" ]] && TS_HOSTNAME="dataserver"
 
   TS_TAILNET=$(wt_input \
-    "Your tailnet name (e.g. tail1234.ts.net)\n\nFind it at login.tailscale.com/admin/machines\nLeave blank if unknown — you can update it later:" "")
+    "Your tailnet name (e.g. tail1234.ts.net)\n\nFind it at login.tailscale.com/admin/machines\nLeave blank if unknown — you can update it later:" "") || TS_TAILNET=""
 
   if [[ -n "$TS_TAILNET" ]]; then
     TS_FQDN="${TS_HOSTNAME}.${TS_TAILNET}"
@@ -415,8 +415,8 @@ step_google_oauth() {
    ${PUBLIC_URL}/api/auth/google/callback\n\
 5. Copy the Client ID and Secret"
 
-  GOOGLE_CLIENT_ID=$(wt_input "Google Client ID:" "")
-  GOOGLE_CLIENT_SECRET=$(wt_input "Google Client Secret:" "")
+  GOOGLE_CLIENT_ID=$(wt_input "Google Client ID:" "") || GOOGLE_CLIENT_ID=""
+  GOOGLE_CLIENT_SECRET=$(wt_input "Google Client Secret:" "") || GOOGLE_CLIENT_SECRET=""
 }
 
 step_smtp() {
@@ -427,11 +427,11 @@ step_smtp() {
     return
   fi
 
-  SMTP_HOST=$(wt_input "SMTP host:" "smtp.gmail.com")
-  SMTP_PORT=$(wt_input "SMTP port:" "587")
-  SMTP_USER=$(wt_input "SMTP username / email:" "")
-  SMTP_PASS=$(wt_pass "SMTP password:")
-  SMTP_FROM=$(wt_input "From address:" "DataServer <noreply@${ADMIN_EMAIL#*@}>")
+  SMTP_HOST=$(wt_input "SMTP host:" "smtp.gmail.com") || SMTP_HOST="smtp.gmail.com"
+  SMTP_PORT=$(wt_input "SMTP port:" "587") || SMTP_PORT="587"
+  SMTP_USER=$(wt_input "SMTP username / email:" "") || SMTP_USER=""
+  SMTP_PASS=$(wt_pass "SMTP password:") || SMTP_PASS=""
+  SMTP_FROM=$(wt_input "From address:" "DataServer <noreply@${ADMIN_EMAIL#*@}>") || SMTP_FROM="DataServer <noreply@${ADMIN_EMAIL#*@}>"
   SMTP_SECURE="false"
   [[ "$SMTP_PORT" == "465" ]] && SMTP_SECURE="true"
 }
