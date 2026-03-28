@@ -9,13 +9,13 @@ import { FileList } from '@/components/file/file-list';
 import { Breadcrumb } from '@/components/file/breadcrumb';
 import { SortControls } from '@/components/file/sort-controls';
 import { UploadButton } from '@/components/file/upload-button';
-import { UploadProgress } from '@/components/file/upload-progress';
 import { CreateFolderModal } from '@/components/file/create-folder-modal';
 import { RenameModal } from '@/components/file/rename-modal';
 import { AutoCreateFolderModal } from '@/components/file/auto-create-folder-modal';
 import { DragDropProvider, DragItem } from '@/components/file/drag-drop-context';
 import { PermissionBadge } from '@/components/ui/badge';
 import { showFileActions, showFolderActions } from '@/components/file/file-actions';
+import { ShareModal } from '@/components/share/share-modal';
 import { downloadAndShareFile } from '@/lib/hooks/use-download';
 import { useMoveFile } from '@/lib/hooks/use-files';
 import { useMoveFolder, useCreateFolder } from '@/lib/hooks/use-folders';
@@ -23,13 +23,14 @@ import { getFolder } from '@/lib/api/folders';
 import type { DriveFile, DriveFolder, Permission } from '@/lib/types';
 
 export default function FolderScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, share } = useLocalSearchParams<{ id: string; share?: string }>();
   const router = useRouter();
   const { viewMode } = useUIStore();
   const [ancestors, setAncestors] = useState<Array<{ id: string; name: string }>>([]);
   const [createFolderVisible, setCreateFolderVisible] = useState(false);
   const [renameItem, setRenameItem] = useState<{ id: string; name: string; type: 'file' | 'folder' } | null>(null);
   const [autoCreateFolder, setAutoCreateFolder] = useState<{ dragged: DragItem; target: DragItem } | null>(null);
+  const [shareModalVisible, setShareModalVisible] = useState(false);
 
   const { data: folderData } = useFolder(id);
   const { data: contentsData, refetch, isRefetching } = useFolderContents(id);
@@ -45,6 +46,11 @@ export default function FolderScreen() {
   const permission = contentsData?.permission ?? ('VIEWER' as Permission);
   const folders = contentsData?.folders ?? [];
   const files = contentsData?.files ?? [];
+
+  // Auto-open share modal when navigated with share=1
+  useEffect(() => {
+    if (share === '1') setShareModalVisible(true);
+  }, [share]);
 
   // Build breadcrumb by walking up parent chain
   useEffect(() => {
@@ -76,7 +82,7 @@ export default function FolderScreen() {
     router.push({ pathname: '/file-preview', params: { fileId: file.id, folderId: id } });
   }
 
-  function handleFileLongPress(file: DriveFile) {
+  function handleFileActions(file: DriveFile) {
     showFileActions(file, {
       onPreview: handleFilePress,
       onDownload: (f) => downloadAndShareFile(f.id),
@@ -86,7 +92,7 @@ export default function FolderScreen() {
     });
   }
 
-  function handleFolderLongPress(folder: DriveFolder) {
+  function handleFolderActions(folder: DriveFolder) {
     showFolderActions(folder, {
       onOpen: (f) => router.push(`/folder/${f.id}`),
       onRename: (f) => setRenameItem({ id: f.id, name: f.name, type: 'folder' }),
@@ -154,14 +160,13 @@ export default function FolderScreen() {
             refreshing={isRefetching}
             onRefresh={refetch}
             onFilePress={handleFilePress}
-            onFileLongPress={handleFileLongPress}
-            onFolderLongPress={handleFolderLongPress}
+            onFileMorePress={handleFileActions}
+            onFolderMorePress={handleFolderActions}
             emptyTitle="This folder is empty"
             emptyIcon="folder-open-outline"
             ListHeaderComponent={header}
           />
         )}
-        <UploadProgress />
         {canUpload && (
           <UploadButton folderId={id} onCreateFolder={() => setCreateFolderVisible(true)} />
         )}
@@ -172,6 +177,15 @@ export default function FolderScreen() {
           onClose={() => setAutoCreateFolder(null)}
           onConfirm={handleAutoCreateFolder}
           isPending={createFolderMut.isPending}
+        />
+        <ShareModal
+          visible={shareModalVisible}
+          onClose={() => {
+            setShareModalVisible(false);
+            router.setParams({ share: undefined });
+          }}
+          folderId={id}
+          folderName={folder?.name ?? ''}
         />
       </View>
     </DragDropProvider>

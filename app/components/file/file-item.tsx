@@ -14,9 +14,10 @@ interface FileItemProps {
   viewMode: ViewMode;
   onPress: () => void;
   onLongPress?: () => void;
+  onMorePress?: () => void;
 }
 
-export function FileItem({ file, viewMode, onPress, onLongPress }: FileItemProps) {
+export function FileItem({ file, viewMode, onPress, onLongPress, onMorePress }: FileItemProps) {
   const hasPreview = !!(file.thumbnailKey || file.previewKey || file.mimeType.startsWith('image/'));
   const previewUrl = usePreviewUrl(file.id, hasPreview);
   const { isDragging, hoveredTargetId, registerTarget, unregisterTarget, startDrag } = useDragDrop();
@@ -24,7 +25,6 @@ export function FileItem({ file, viewMode, onPress, onLongPress }: FileItemProps
   const isHovered = hoveredTargetId === file.id;
 
   useEffect(() => {
-    // Re-measure when layout changes
     return () => unregisterTarget(file.id);
   }, [file.id]);
 
@@ -36,7 +36,6 @@ export function FileItem({ file, viewMode, onPress, onLongPress }: FileItemProps
 
   function handleLongPress(e: { nativeEvent: { pageX: number; pageY: number } }) {
     startDrag({ type: 'file', id: file.id, name: file.name }, e.nativeEvent.pageX, e.nativeEvent.pageY);
-    onLongPress?.();
   }
 
   if (viewMode === 'grid') {
@@ -61,9 +60,14 @@ export function FileItem({ file, viewMode, onPress, onLongPress }: FileItemProps
               </View>
             )}
           </View>
-          <View className="p-3">
-            <Text className="text-sm font-medium text-slate-800" numberOfLines={1}>{file.name}</Text>
-            <Text className="text-xs text-slate-400 mt-0.5">{formatFileSize(file.size)}</Text>
+          <View className="flex-row items-center justify-between p-3">
+            <View className="flex-1 mr-2">
+              <Text className="text-sm font-medium text-slate-800" numberOfLines={1}>{file.name}</Text>
+              <Text className="text-xs text-slate-400 mt-0.5">{formatFileSize(file.size)}</Text>
+            </View>
+            <TouchableOpacity onPress={onMorePress} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Ionicons name="ellipsis-vertical" size={18} color="#94a3b8" />
+            </TouchableOpacity>
           </View>
         </TouchableOpacity>
       </View>
@@ -93,7 +97,9 @@ export function FileItem({ file, viewMode, onPress, onLongPress }: FileItemProps
           <Text className="text-xs text-slate-400 mt-0.5">{formatFileSize(file.size)} · {formatDate(file.updatedAt)}</Text>
         </View>
         {file.isStarred && <Ionicons name="star" size={14} color="#f59e0b" style={{ marginRight: 8 }} />}
-        <Ionicons name="ellipsis-vertical" size={18} color="#94a3b8" />
+        <TouchableOpacity onPress={onMorePress} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <Ionicons name="ellipsis-vertical" size={18} color="#94a3b8" />
+        </TouchableOpacity>
       </TouchableOpacity>
     </View>
   );

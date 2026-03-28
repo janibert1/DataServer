@@ -8,7 +8,6 @@ import { FileList } from '@/components/file/file-list';
 import { SortControls } from '@/components/file/sort-controls';
 import { SearchBar } from '@/components/ui/search-bar';
 import { UploadButton } from '@/components/file/upload-button';
-import { UploadProgress } from '@/components/file/upload-progress';
 import { CreateFolderModal } from '@/components/file/create-folder-modal';
 import { RenameModal } from '@/components/file/rename-modal';
 import { AutoCreateFolderModal } from '@/components/file/auto-create-folder-modal';
@@ -57,7 +56,7 @@ export default function MyDriveScreen() {
     router.push({ pathname: '/file-preview', params: { fileId: file.id, folderId: file.folderId ?? '' } });
   }
 
-  function handleFileLongPress(file: DriveFile) {
+  function handleFileActions(file: DriveFile) {
     showFileActions(file, {
       onPreview: handleFilePress,
       onDownload: (f) => downloadAndShareFile(f.id),
@@ -67,7 +66,7 @@ export default function MyDriveScreen() {
     });
   }
 
-  function handleFolderLongPress(folder: DriveFolder) {
+  function handleFolderActions(folder: DriveFolder) {
     showFolderActions(folder, {
       onOpen: (f) => router.push(`/folder/${f.id}`),
       onRename: (f) => setRenameItem({ id: f.id, name: f.name, type: 'folder' }),
@@ -144,14 +143,13 @@ export default function MyDriveScreen() {
         refreshing={refreshing}
         onRefresh={handleRefresh}
         onFilePress={handleFilePress}
-        onFileLongPress={handleFileLongPress}
-        onFolderLongPress={handleFolderLongPress}
+        onFileMorePress={handleFileActions}
+        onFolderMorePress={handleFolderActions}
         emptyTitle="Your drive is empty"
         emptyDescription="Upload files to get started"
         emptyIcon="cloud-upload-outline"
         ListHeaderComponent={header}
       />
-      <UploadProgress />
       <UploadButton onCreateFolder={() => setCreateFolderVisible(true)} />
       <CreateFolderModal visible={createFolderVisible} onClose={() => setCreateFolderVisible(false)} />
       <RenameModal visible={!!renameItem} onClose={() => setRenameItem(null)} item={renameItem} />

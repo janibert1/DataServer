@@ -12,9 +12,10 @@ interface FolderItemProps {
   viewMode: ViewMode;
   onPress: () => void;
   onLongPress?: () => void;
+  onMorePress?: () => void;
 }
 
-export function FolderItem({ folder, viewMode, onPress, onLongPress }: FolderItemProps) {
+export function FolderItem({ folder, viewMode, onPress, onLongPress, onMorePress }: FolderItemProps) {
   const counts = folder._count;
   const { isDragging, hoveredTargetId, registerTarget, unregisterTarget, startDrag } = useDragDrop();
   const viewRef = useRef<View>(null);
@@ -32,7 +33,6 @@ export function FolderItem({ folder, viewMode, onPress, onLongPress }: FolderIte
 
   function handleLongPress(e: { nativeEvent: { pageX: number; pageY: number } }) {
     startDrag({ type: 'folder', id: folder.id, name: folder.name }, e.nativeEvent.pageX, e.nativeEvent.pageY);
-    onLongPress?.();
   }
 
   if (viewMode === 'grid') {
@@ -58,16 +58,21 @@ export function FolderItem({ folder, viewMode, onPress, onLongPress }: FolderIte
               </View>
             )}
           </View>
-          <View className="p-3">
-            <Text className="text-sm font-medium text-slate-800" numberOfLines={1}>{folder.name}</Text>
-            {counts && (
-              <Text className="text-xs text-slate-400 mt-0.5">
-                {counts.children > 0 ? `${counts.children} folders` : ''}
-                {counts.children > 0 && counts.files > 0 ? ' · ' : ''}
-                {counts.files > 0 ? `${counts.files} files` : ''}
-                {counts.children === 0 && counts.files === 0 ? 'Empty' : ''}
-              </Text>
-            )}
+          <View className="flex-row items-center justify-between p-3">
+            <View className="flex-1 mr-2">
+              <Text className="text-sm font-medium text-slate-800" numberOfLines={1}>{folder.name}</Text>
+              {counts && (
+                <Text className="text-xs text-slate-400 mt-0.5">
+                  {counts.children > 0 ? `${counts.children} folders` : ''}
+                  {counts.children > 0 && counts.files > 0 ? ' · ' : ''}
+                  {counts.files > 0 ? `${counts.files} files` : ''}
+                  {counts.children === 0 && counts.files === 0 ? 'Empty' : ''}
+                </Text>
+              )}
+            </View>
+            <TouchableOpacity onPress={onMorePress} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Ionicons name="ellipsis-vertical" size={18} color="#94a3b8" />
+            </TouchableOpacity>
           </View>
         </TouchableOpacity>
       </View>
@@ -92,7 +97,9 @@ export function FolderItem({ folder, viewMode, onPress, onLongPress }: FolderIte
         </View>
         {folder.isShared && <Ionicons name="people-outline" size={16} color="#94a3b8" style={{ marginRight: 8 }} />}
         {folder.isStarred && <Ionicons name="star" size={14} color="#f59e0b" style={{ marginRight: 8 }} />}
-        <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
+        <TouchableOpacity onPress={onMorePress} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <Ionicons name="ellipsis-vertical" size={18} color="#94a3b8" />
+        </TouchableOpacity>
       </TouchableOpacity>
     </View>
   );

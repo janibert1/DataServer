@@ -66,7 +66,7 @@ export default function TrashScreen() {
         viewMode={viewMode}
         refreshing={isRefetching}
         onRefresh={refetch}
-        onFileLongPress={handleFileLongPress}
+        onFileMorePress={handleFileLongPress}
         emptyTitle="Trash is empty"
         emptyDescription="Items you delete will appear here"
         emptyIcon="trash-outline"

@@ -14,7 +14,9 @@ interface FileListProps {
   onRefresh?: () => void;
   onFilePress?: (file: DriveFile) => void;
   onFileLongPress?: (file: DriveFile) => void;
+  onFileMorePress?: (file: DriveFile) => void;
   onFolderLongPress?: (folder: DriveFolder) => void;
+  onFolderMorePress?: (folder: DriveFolder) => void;
   emptyTitle?: string;
   emptyDescription?: string;
   emptyIcon?: string;
@@ -33,7 +35,9 @@ export function FileList({
   onRefresh,
   onFilePress,
   onFileLongPress,
+  onFileMorePress,
   onFolderLongPress,
+  onFolderMorePress,
   emptyTitle = 'No files yet',
   emptyDescription,
   emptyIcon,
@@ -91,6 +95,7 @@ export function FileList({
                 viewMode={viewMode}
                 onPress={() => router.push(`/folder/${item.data.id}`)}
                 onLongPress={() => onFolderLongPress?.(item.data)}
+                onMorePress={() => onFolderMorePress?.(item.data)}
               />
             </View>
           );
@@ -102,6 +107,7 @@ export function FileList({
               viewMode={viewMode}
               onPress={() => onFilePress?.(item.data)}
               onLongPress={() => onFileLongPress?.(item.data)}
+              onMorePress={() => onFileMorePress?.(item.data)}
             />
           </View>
         );

@@ -14,6 +14,7 @@ LogBox.ignoreLogs(['Each child in a list should have a unique "key" prop']);
 
 import { useAuthStore } from '@/stores/auth-store';
 import { useAuthInit } from '@/lib/hooks/use-auth';
+import { UploadProgress } from '@/components/file/upload-progress';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -79,13 +80,16 @@ export default function RootLayout() {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthGate>
-        <Stack screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="(auth)" />
-          <Stack.Screen name="(tabs)" />
-          <Stack.Screen name="folder/[id]" options={{ headerShown: true, title: '' }} />
-          <Stack.Screen name="file-preview" options={{ presentation: 'fullScreenModal' }} />
-          <Stack.Screen name="settings" options={{ headerShown: false }} />
-        </Stack>
+        <View style={{ flex: 1 }}>
+          <Stack screenOptions={{ headerShown: false }}>
+            <Stack.Screen name="(auth)" />
+            <Stack.Screen name="(tabs)" />
+            <Stack.Screen name="folder/[id]" options={{ headerShown: true, title: '' }} />
+            <Stack.Screen name="file-preview" options={{ presentation: 'fullScreenModal' }} />
+            <Stack.Screen name="settings" options={{ headerShown: false }} />
+          </Stack>
+          <UploadProgress />
+        </View>
       </AuthGate>
       <StatusBar style="dark" />
       <Toast />
