@@ -353,6 +353,19 @@ Press Enter when you have the token."
     wt_msg "Domain is required."
   done
 
+  # Figure out subdomain vs bare domain
+  local cf_parts cf_subdomain cf_basedomain
+  cf_parts=$(echo "$CF_DOMAIN" | tr '.' '\n' | wc -l)
+  if [[ "$cf_parts" -gt 2 ]]; then
+    # e.g. files.jdries.nl → subdomain=files, domain=jdries.nl
+    cf_subdomain=$(echo "$CF_DOMAIN" | cut -d. -f1)
+    cf_basedomain=$(echo "$CF_DOMAIN" | cut -d. -f2-)
+  else
+    # e.g. jdries.nl → no subdomain, domain=jdries.nl
+    cf_subdomain="(leave empty)"
+    cf_basedomain="$CF_DOMAIN"
+  fi
+
   wt_ok "── Step 2: Configure the public hostname ──────\n\
 \n\
 Back in the Cloudflare dashboard, click Next\n\
@@ -360,8 +373,8 @@ to reach the \"Route tunnel\" page.\n\
 \n\
 Add a public hostname with these settings:\n\
 \n\
-  Subdomain : $(echo "$CF_DOMAIN" | cut -d. -f1)\n\
-  Domain    : $(echo "$CF_DOMAIN" | cut -d. -f2-)\n\
+  Subdomain : ${cf_subdomain}\n\
+  Domain    : ${cf_basedomain}\n\
   Type      : HTTP\n\
   URL       : frontend:80\n\
 \n\
