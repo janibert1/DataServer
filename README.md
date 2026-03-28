@@ -31,6 +31,7 @@ A production-ready, **invitation-only** cloud storage platform — your own self
 - [Security Overview](#security-overview)
 - [Background Workers](#background-workers)
 - [Local Development Setup](#local-development-setup)
+- [Managing the Server](#managing-the-server)
 - [Updating](#updating)
 - [Troubleshooting](#troubleshooting)
 
@@ -48,7 +49,8 @@ A production-ready, **invitation-only** cloud storage platform — your own self
 | **File versioning** | Previous versions retained and restorable |
 | **Admin panel** | User management, quota control, invitation management, audit logs, content moderation |
 | **Security** | Argon2id passwords, signed download URLs (never exposed), ClamAV virus scanning, MIME validation, rate limiting |
-| **Quotas** | Per-user configurable storage quotas + optional total bucket quota |
+| **Quotas** | Per-user configurable storage quotas + server-wide capacity limit with disk detection |
+| **Mobile app** | iOS/Android companion app (Expo/React Native) with upload queue, drag-and-drop, offline-ready |
 | **Notifications** | In-app + email notifications for shares, security events, storage warnings |
 | **Audit logging** | Immutable log of every sensitive action with user, IP, and timestamp |
 | **Background jobs** | Thumbnail generation, virus scanning, 30-day trash cleanup — async via BullMQ |
@@ -112,12 +114,17 @@ The wizard will walk you through:
 1. Install directory
 2. Admin account credentials
 3. File storage location (Docker volume or custom path/NAS/external drive)
-4. Storage limits (total, per-user, max file size)
-5. Access mode (local / Tailscale / Cloudflare Tunnel / both)
+4. Storage limits (total server capacity, per-user quota, max file size)
+5. Access mode:
+   - **Local** — LAN only, no internet
+   - **Tailscale Serve** — private HTTPS, your tailnet only
+   - **Tailscale Funnel** — public HTTPS via Tailscale
+   - **Cloudflare Tunnel** — public HTTPS on your own domain (guided step-by-step setup)
+   - **Tailscale + Cloudflare** — both
 6. Google OAuth (optional)
-7. SMTP email (optional)
+7. SMTP email (optional, with Gmail App Password instructions)
 
-At the end it builds, starts, initialises the database, seeds the admin account, sets the MinIO quota, and shows you your access URL.
+The installer then shows a **progress bar** as it builds and starts all services, followed by a **verification screen** confirming every container is running and the API responds. Finally it shows your access URL and admin login.
 
 ---
 
@@ -264,7 +271,7 @@ Navigate to `http://YOUR_SERVER_IP:3005` and log in with your admin credentials.
 | Variable | Description |
 |---|---|
 | `TAILSCALE_AUTHKEY` | Auth key from [login.tailscale.com/admin/settings/keys](https://login.tailscale.com/admin/settings/keys) — generate as **Reusable** |
-| `CLOUDFLARE_TOKEN` | Tunnel token from Cloudflare Zero Trust → Tunnels |
+| `CLOUDFLARE_TOKEN` | Tunnel token from Cloudflare → Networks → Connectors |
 
 ### Admin Bootstrap
 
@@ -292,9 +299,16 @@ In `docker-compose.yml` the frontend port maps to `3005:80` (or any free port).
 
 ---
 
-### Tailscale (Private HTTPS)
+### Tailscale (HTTPS)
 
-Tailscale gives you a private `*.ts.net` HTTPS URL accessible from any of your devices, anywhere — without opening any firewall ports.
+Tailscale gives you a `*.ts.net` HTTPS URL — without opening any firewall ports. Two modes:
+
+| Mode | Who can access | ACL change needed? |
+|---|---|---|
+| **Serve** | Only devices on your tailnet (private) | No |
+| **Funnel** | Anyone with the URL (public) | Yes |
+
+> The interactive installer handles all of this automatically — just select Tailscale and choose Serve or Funnel. The steps below are for manual setup only.
 
 #### 1. Get a Tailscale auth key
 
@@ -304,7 +318,9 @@ Go to [login.tailscale.com/admin/settings/keys](https://login.tailscale.com/admi
 
 [login.tailscale.com/admin/dns](https://login.tailscale.com/admin/dns) → scroll down → **Enable HTTPS Certificates** → Save.
 
-#### 3. Enable Funnel in your ACL policy
+#### 3. Enable Funnel in your ACL policy (Funnel mode only)
+
+Skip this step if you're using **Serve** (private) mode.
 
 [login.tailscale.com/admin/acls](https://login.tailscale.com/admin/acls) — add this top-level key:
 
@@ -331,7 +347,20 @@ GOOGLE_CALLBACK_URL=https://dataserver.YOUR-TAILNET.ts.net/api/auth/google/callb
 
 #### 5. Update `tailscale/serve.json`
 
-Replace the hostname with your actual `*.ts.net` address:
+Replace the hostname with your actual `*.ts.net` address. **For Serve (private):**
+
+```json
+{
+  "TCP": { "443": { "HTTPS": true } },
+  "Web": {
+    "dataserver.YOUR-TAILNET.ts.net:443": {
+      "Handlers": { "/": { "Proxy": "http://frontend:80" } }
+    }
+  }
+}
+```
+
+**For Funnel (public)** — add the `AllowFunnel` key:
 
 ```json
 {
@@ -353,26 +382,36 @@ Replace the hostname with your actual `*.ts.net` address:
 sudo docker compose up -d
 ```
 
-> **Tailscale Funnel vs Serve:**
-> - **Serve** — accessible only to devices on your tailnet (private)
-> - **Funnel** — publicly accessible to anyone with the URL (requires the ACL step above)
-
 ---
 
 ### Cloudflare Tunnel (Public HTTPS)
 
 Best for: public deployment on your own domain with automatic HTTPS.
 
+> **Free plan upload limit:** Cloudflare's free plan limits HTTP request bodies to **100 MB**. If you need larger uploads, consider upgrading your Cloudflare plan, using Tailscale instead, or setting `MAX_FILE_SIZE_BYTES` to stay under 100 MB.
+
+> The interactive installer handles all of this with guided step-by-step instructions. The steps below are for manual setup only.
+
 #### 1. Create a tunnel
 
-Go to [dash.cloudflare.com](https://dash.cloudflare.com) → Zero Trust → Networks → Tunnels → **Create a tunnel** → Docker. Copy the tunnel token.
+Go to [dash.cloudflare.com](https://dash.cloudflare.com) → **Networks** → **Connectors** → **Add a tunnel** → select **Cloudflared** → give it a name (e.g. `dataserver`).
+
+On the Install connector page, select **Docker** and copy only the **tunnel token** (the long string after `--token`). You don't need to run the Docker command shown — the `cloudflared` service in docker-compose handles this automatically.
 
 #### 2. Configure the public hostname
 
-In the tunnel settings → **Public Hostname**:
-- Domain: `files.yourdomain.com`
-- Service Type: `HTTP`
-- URL: `frontend:80`
+Still in the tunnel setup (or edit it later from **Networks → Connectors → your tunnel → Edit**):
+
+Go to the **Public Hostnames** tab → **Add a public hostname**:
+
+| Field | Value |
+|---|---|
+| **Subdomain** | `files` (or whatever you want, e.g. `cloud`, `drive`) |
+| **Domain** | Select your domain from the dropdown (must be on Cloudflare DNS) |
+| **Type** | `HTTP` |
+| **URL** | `frontend:80` |
+
+> `frontend:80` refers to the Docker container name and port — it's an internal Docker network address. The `cloudflared` container connects to it directly. This does **not** conflict with anything running on port 80 on your host machine.
 
 #### 3. Configure `.env`
 
@@ -619,6 +658,32 @@ npm run dev               # http://localhost:5173
 ```
 
 The Vite dev server proxies `/api/*` to `http://localhost:4000` automatically.
+
+---
+
+## Managing the Server
+
+```bash
+cd /opt/dataserver        # or wherever you installed it
+
+# Stop all services
+sudo docker compose down
+
+# Start all services
+sudo docker compose up -d
+
+# Restart a single service
+sudo docker compose restart backend
+
+# View logs (all services)
+sudo docker compose logs -f
+
+# View logs (single service)
+sudo docker compose logs -f backend
+
+# Check service status
+sudo docker compose ps
+```
 
 ---
 
