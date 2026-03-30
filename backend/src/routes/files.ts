@@ -138,6 +138,65 @@ filesRouter.get('/trash', async (req: Request, res: Response) => {
   });
 });
 
+// ─── Empty trash ─────────────────────────────────────────────
+
+filesRouter.post('/empty-trash', async (req: Request, res: Response) => {
+  const user = req.user as any;
+
+  // Check if there's already a pending/active job for this user
+  const jobs = await emptyTrashQueue.getJobs(['active', 'waiting', 'delayed']);
+  const existingJob = jobs.find((j) => j.data.userId === user.id);
+  if (existingJob) {
+    res.status(409).json({ error: 'Empty trash operation already in progress.' });
+    return;
+  }
+
+  // Count items for the audit log
+  const [fileCount, folderCount] = await Promise.all([
+    prisma.file.count({ where: { ownerId: user.id, isTrashed: true } }),
+    prisma.folder.count({ where: { ownerId: user.id, isTrashed: true } }),
+  ]);
+
+  if (fileCount === 0 && folderCount === 0) {
+    res.json({ message: 'Trash is already empty.', count: 0 });
+    return;
+  }
+
+  // Enqueue background job
+  const job = await emptyTrashQueue.add('empty-trash', { userId: user.id }, {
+    jobId: `empty-trash:${user.id}`, // one job per user at a time
+  });
+
+  await auditFromRequest(req, AuditAction.FILE_DELETED, {
+    details: { emptyTrash: true, jobId: job.id, fileCount, folderCount },
+  });
+
+  res.json({
+    message: `Emptying trash in the background. You will be notified when done.`,
+    jobId: job.id,
+    estimate: fileCount + folderCount,
+  });
+});
+
+// Check status of an empty-trash job
+filesRouter.get('/empty-trash/status', async (req: Request, res: Response) => {
+  const user = req.user as any;
+
+  const jobs = await emptyTrashQueue.getJobs(['active', 'waiting', 'delayed', 'completed']);
+  const job = jobs.find((j) => j.data.userId === user.id);
+
+  if (!job) {
+    res.json({ status: 'idle' });
+    return;
+  }
+
+  res.json({
+    status: job.failedReason ? 'failed' : job.finishedOn ? 'completed' : 'processing',
+    progress: job.progress,
+    jobId: job.id,
+  });
+});
+
 // ─── Upload file ─────────────────────────────────────────────
 
 filesRouter.post(
@@ -663,63 +722,4 @@ filesRouter.get('/:id/versions', async (req: Request, res: Response) => {
   });
 
   res.json({ versions: versions.map((v) => ({ ...v, size: v.size.toString() })) });
-});
-
-// ─── Empty trash ─────────────────────────────────────────────
-
-filesRouter.post('/empty-trash', async (req: Request, res: Response) => {
-  const user = req.user as any;
-
-  // Check if there's already a pending/active job for this user
-  const jobs = await emptyTrashQueue.getJobs(['active', 'waiting', 'delayed']);
-  const existingJob = jobs.find((j) => j.data.userId === user.id);
-  if (existingJob) {
-    res.status(409).json({ error: 'Empty trash operation already in progress.' });
-    return;
-  }
-
-  // Count items for the audit log
-  const [fileCount, folderCount] = await Promise.all([
-    prisma.file.count({ where: { ownerId: user.id, isTrashed: true } }),
-    prisma.folder.count({ where: { ownerId: user.id, isTrashed: true } }),
-  ]);
-
-  if (fileCount === 0 && folderCount === 0) {
-    res.json({ message: 'Trash is already empty.', count: 0 });
-    return;
-  }
-
-  // Enqueue background job
-  const job = await emptyTrashQueue.add('empty-trash', { userId: user.id }, {
-    jobId: `empty-trash:${user.id}`, // one job per user at a time
-  });
-
-  await auditFromRequest(req, AuditAction.FILE_DELETED, {
-    details: { emptyTrash: true, jobId: job.id, fileCount, folderCount },
-  });
-
-  res.json({
-    message: `Emptying trash in the background. You will be notified when done.`,
-    jobId: job.id,
-    estimate: fileCount + folderCount,
-  });
-});
-
-// Check status of an empty-trash job
-filesRouter.get('/empty-trash/status', async (req: Request, res: Response) => {
-  const user = req.user as any;
-
-  const jobs = await emptyTrashQueue.getJobs(['active', 'waiting', 'delayed', 'completed']);
-  const job = jobs.find((j) => j.data.userId === user.id);
-
-  if (!job) {
-    res.json({ status: 'idle' });
-    return;
-  }
-
-  res.json({
-    status: job.failedReason ? 'failed' : job.finishedOn ? 'completed' : 'processing',
-    progress: job.progress,
-    jobId: job.id,
-  });
 });
