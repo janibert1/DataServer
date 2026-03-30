@@ -63,6 +63,7 @@ enum NotificationType {
   SUSPICIOUS_LOGIN
   SECURITY_CHANGE
   FILE_FLAGGED
+  TASK_COMPLETED
 }
 
 enum AuditAction {

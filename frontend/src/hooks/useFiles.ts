@@ -224,11 +224,31 @@ export function useEmptyTrash() {
   return useMutation({
     mutationFn: () => api.post('/files/empty-trash'),
     onSuccess: (res) => {
+      if (res.data.status === 'processing' || res.data.jobId) {
+        toast.success('Emptying trash in the background. You will be notified when complete.');
+      } else {
+        toast.success(res.data.message);
+      }
       queryClient.invalidateQueries({ queryKey: ['files'] });
       queryClient.invalidateQueries({ queryKey: ['auth', 'me'] });
-      toast.success(res.data.message);
     },
     onError: (err) => toast.error(getErrorMessage(err)),
+  });
+}
+
+export function useEmptyTrashStatus() {
+  return useQuery({
+    queryKey: ['empty-trash-status'],
+    queryFn: async () => {
+      const res = await api.get('/files/empty-trash/status');
+      return res.data as { status: 'idle' | 'processing' | 'completed' | 'failed'; progress: number; jobId: string };
+    },
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      if (data?.status === 'processing') return 2000;
+      return false;
+    },
+    initialData: { status: 'idle' as const, progress: 0, jobId: '' },
   });
 }
 

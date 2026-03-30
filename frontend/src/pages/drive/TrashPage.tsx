@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Trash2, AlertTriangle, RotateCcw, X, Folder } from 'lucide-react';
 import { DriveFile, DriveFolder } from '../../types';
 import {
-  useTrashedFiles, useRestoreFile, useDeleteFilePermanently, useEmptyTrash
+  useTrashedFiles, useRestoreFile, useDeleteFilePermanently, useEmptyTrash, useEmptyTrashStatus
 } from '../../hooks/useFiles';
 import { useTrashedFolders, useRestoreFolder, useDeleteFolderPermanently } from '../../hooks/useFolders';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog';
@@ -35,18 +35,29 @@ export function TrashPage() {
   const [confirmDeleteFile, setConfirmDeleteFile] = useState<DriveFile | null>(null);
   const [confirmDeleteFolder, setConfirmDeleteFolder] = useState<DriveFolder | null>(null);
 
-  const { data: trashedFiles, isLoading: filesLoading } = useTrashedFiles();
-  const { data: trashedFolders, isLoading: foldersLoading } = useTrashedFolders();
+  const { data: trashedFiles, isLoading: filesLoading, refetch: refetchTrash } = useTrashedFiles();
+  const { data: trashedFolders, isLoading: foldersLoading, refetch: refetchTrashFolders } = useTrashedFolders();
   const restoreFile = useRestoreFile();
   const deleteFile = useDeleteFilePermanently();
   const restoreFolder = useRestoreFolder();
   const deleteFolder = useDeleteFolderPermanently();
   const emptyTrash = useEmptyTrash();
+  const emptyTrashStatus = useEmptyTrashStatus();
 
   const files = trashedFiles ?? [];
   const folders = trashedFolders ?? [];
   const totalItems = files.length + folders.length;
   const isLoading = filesLoading || foldersLoading;
+
+  // Poll for empty-trash completion when processing
+  const isProcessing = emptyTrashStatus.data?.status === 'processing';
+
+  useEffect(() => {
+    if (emptyTrashStatus.data?.status === 'completed' || emptyTrashStatus.data?.status === 'failed') {
+      refetchTrash();
+      refetchTrashFolders();
+    }
+  }, [emptyTrashStatus.data?.status, refetchTrash, refetchTrashFolders]);
 
   return (
     <div className="p-6 space-y-6">
@@ -183,13 +194,27 @@ export function TrashPage() {
       <ConfirmDialog
         open={showEmptyConfirm}
         onClose={() => setShowEmptyConfirm(false)}
-        onConfirm={() => emptyTrash.mutate(undefined, { onSuccess: () => setShowEmptyConfirm(false) })}
+        onConfirm={() => {
+          setShowEmptyConfirm(false);
+          emptyTrash.mutate(undefined);
+        }}
         title="Empty trash?"
         description={`This will permanently delete all ${totalItems} item${totalItems !== 1 ? 's' : ''} in your trash. This action cannot be undone.`}
         confirmLabel="Empty trash"
         variant="danger"
         isLoading={emptyTrash.isPending}
       />
+
+      {/* Processing indicator */}
+      {isProcessing && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 flex items-center gap-3">
+          <LoadingSpinner size="sm" />
+          <div>
+            <p className="text-sm font-medium text-blue-900">Emptying trash...</p>
+            <p className="text-xs text-blue-600 mt-0.5">This may take a few minutes. You will be notified when complete.</p>
+          </div>
+        </div>
+      )}
 
       {/* Delete single file confirm */}
       <ConfirmDialog

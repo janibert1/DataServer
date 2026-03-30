@@ -165,16 +165,21 @@ export function FolderPage() {
   }
 
   function handleSelectAll() {
-    if (selectAllMode || selectedItems.size === loadedItems) {
-      setSelectedItems(new Set());
-      setSelectAllMode(false);
-    } else {
+    if (selectAllMode) {
       const allKeys = [
         ...folders.map((f: any) => `folder:${f.id}`),
         ...files.map((f: any) => `file:${f.id}`),
       ];
       setSelectedItems(new Set(allKeys));
       setSelectAllMode(false);
+    } else if (selectedItems.size === loadedItems) {
+      setSelectedItems(new Set());
+    } else {
+      const allKeys = [
+        ...folders.map((f: any) => `folder:${f.id}`),
+        ...files.map((f: any) => `file:${f.id}`),
+      ];
+      setSelectedItems(new Set(allKeys));
     }
   }
 
@@ -328,12 +333,12 @@ export function FolderPage() {
           <div className="flex items-center gap-3 px-4 py-3 bg-brand-50 border border-brand-200 rounded-xl">
             <input
               type="checkbox"
-              checked={allLoadedSelected}
+              checked={selectAllMode || allLoadedSelected}
               onChange={handleSelectAll}
               className="w-4 h-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500 cursor-pointer"
             />
             <span className="text-sm font-medium text-brand-800">
-              {selectedItems.size} selected
+              {selectAllMode ? `${fileTotal} selected` : `${selectedItems.size} selected`}
             </span>
             <div className="flex-1" />
             <button
@@ -364,7 +369,7 @@ export function FolderPage() {
               onClick={handleSelectAll}
               className={clsx(
                 'px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors',
-                selectedItems.size > 0 && !selectAllMode
+                selectAllMode || selectedItems.size > 0
                   ? 'bg-brand-100 text-brand-700 border-brand-200'
                   : 'text-slate-600 bg-white border-slate-200 hover:bg-slate-50'
               )}
@@ -511,7 +516,7 @@ export function FolderPage() {
         open={confirmBulkTrash}
         onClose={() => setConfirmBulkTrash(false)}
         onConfirm={handleBulkTrash}
-        title={`Move ${selectedItems.size} items to trash?`}
+        title={`Move ${selectAllMode ? fileTotal : selectedItems.size} items to trash?`}
         description="You can restore them from the trash within 30 days."
         confirmLabel="Move to trash"
         variant="danger"

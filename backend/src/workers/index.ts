@@ -8,9 +8,10 @@ import { previewWorker } from './previewWorker';
 import { virusScanWorker } from './virusScanWorker';
 import { trashCleanupWorker } from './trashCleanupWorker';
 import { notificationWorker } from './notificationWorker';
+import { emptyTrashWorker } from './emptyTrashWorker';
 
 // Re-export workers for callers that need direct access
-export { previewWorker, virusScanWorker, trashCleanupWorker, notificationWorker };
+export { previewWorker, virusScanWorker, trashCleanupWorker, notificationWorker, emptyTrashWorker };
 
 // Scheduled / recurring job registration
 export { scheduleRecurringJobs } from './scheduledJobs';
@@ -20,8 +21,9 @@ export type { PreviewJobData } from './previewWorker';
 export type { VirusScanJobData } from './virusScanWorker';
 export type { TrashCleanupJobData } from './trashCleanupWorker';
 export type { NotificationJobData } from './notificationWorker';
+export type { EmptyTrashJobData } from './emptyTrashWorker';
 
-const ALL_WORKERS = [previewWorker, virusScanWorker, trashCleanupWorker, notificationWorker];
+const ALL_WORKERS = [previewWorker, virusScanWorker, trashCleanupWorker, notificationWorker, emptyTrashWorker];
 
 /**
  * Starts all BullMQ workers and registers recurring scheduled jobs.

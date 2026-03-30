@@ -9,11 +9,12 @@ import { prisma } from '../lib/prisma';
 import { uploadToS3, getSignedDownloadUrl, deleteFromS3, buildStorageKey, getObjectStream } from '../lib/s3';
 import { auditFromRequest } from '../services/auditService';
 import { checkFileAccess, getEffectivePermission } from '../services/sharingService';
-import { checkQuota, incrementUsage, decrementUsage, decrementUsageTotal } from '../services/quotaService';
+import { checkQuota, incrementUsage, decrementUsage } from '../services/quotaService';
 import { checkTotalCapacity } from '../services/storageCapacityService';
 import { AuditAction, FileStatus, SharePermission } from '@prisma/client';
 import { logger } from '../lib/logger';
 import { v4 as uuidv4 } from 'uuid';
+import { emptyTrashQueue } from '../workers/queues';
 
 export const filesRouter = Router();
 
@@ -654,46 +655,56 @@ filesRouter.get('/:id/versions', async (req: Request, res: Response) => {
 filesRouter.post('/empty-trash', async (req: Request, res: Response) => {
   const user = req.user as any;
 
-  const trashedFiles = await prisma.file.findMany({
-    where: { ownerId: user.id, isTrashed: true },
-    select: { id: true, storageKey: true, size: true },
-  });
-
-  let totalBytes = BigInt(0);
-  for (const file of trashedFiles) {
-    try {
-      await deleteFromS3(file.storageKey);
-    } catch (err) {
-      logger.error('Failed to delete file from S3 during trash empty', { err, storageKey: file.storageKey });
-    }
-    totalBytes += file.size;
+  // Check if there's already a pending/active job for this user
+  const jobs = await emptyTrashQueue.getJobs(['active', 'waiting', 'delayed']);
+  const existingJob = jobs.find((j) => j.data.userId === user.id);
+  if (existingJob) {
+    res.status(409).json({ error: 'Empty trash operation already in progress.' });
+    return;
   }
 
-  // Batch DB update — find IDs first, then update by ID list to avoid long locks
-  const BATCH = 500;
-  let deleted = 0;
-  while (true) {
-    const files = await prisma.file.findMany({
-      where: { ownerId: user.id, isTrashed: true },
-      select: { id: true },
-      take: BATCH,
-    });
-    if (files.length === 0) break;
-    await prisma.file.updateMany({
-      where: { id: { in: files.map((f) => f.id) } },
-      data: { status: FileStatus.DELETED, deletedAt: new Date() },
-    });
-    deleted += files.length;
-    if (files.length < BATCH) break;
+  // Count items for the audit log
+  const [fileCount, folderCount] = await Promise.all([
+    prisma.file.count({ where: { ownerId: user.id, isTrashed: true } }),
+    prisma.folder.count({ where: { ownerId: user.id, isTrashed: true } }),
+  ]);
+
+  if (fileCount === 0 && folderCount === 0) {
+    res.json({ message: 'Trash is already empty.', count: 0 });
+    return;
   }
 
-  // Also permanently delete trashed folders
-  await prisma.folder.updateMany({
-    where: { ownerId: user.id, isTrashed: true },
-    data: { deletedAt: new Date() },
+  // Enqueue background job
+  const job = await emptyTrashQueue.add('empty-trash', { userId: user.id }, {
+    jobId: `empty-trash:${user.id}`, // one job per user at a time
   });
 
-  await decrementUsageTotal(user.id, totalBytes);
+  await auditFromRequest(req, AuditAction.FILE_DELETED, {
+    details: { emptyTrash: true, jobId: job.id, fileCount, folderCount },
+  });
 
-  res.json({ message: `Permanently deleted ${deleted} file(s).`, count: deleted });
+  res.json({
+    message: `Emptying trash in the background. You will be notified when done.`,
+    jobId: job.id,
+    estimate: fileCount + folderCount,
+  });
+});
+
+// Check status of an empty-trash job
+filesRouter.get('/empty-trash/status', async (req: Request, res: Response) => {
+  const user = req.user as any;
+
+  const jobs = await emptyTrashQueue.getJobs(['active', 'waiting', 'delayed', 'completed']);
+  const job = jobs.find((j) => j.data.userId === user.id);
+
+  if (!job) {
+    res.json({ status: 'idle' });
+    return;
+  }
+
+  res.json({
+    status: job.failedReason ? 'failed' : job.finishedOn ? 'completed' : 'processing',
+    progress: job.progress,
+    jobId: job.id,
+  });
 });

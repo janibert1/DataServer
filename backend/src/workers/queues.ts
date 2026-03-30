@@ -32,3 +32,9 @@ export const notificationQueue = new Queue('notification-queue', {
   connection,
   defaultJobOptions,
 });
+
+// Queue for permanently deleting trash (empty-trash operations)
+export const emptyTrashQueue = new Queue('empty-trash-queue', {
+  connection,
+  defaultJobOptions,
+});
