@@ -9,6 +9,7 @@ export function useFiles(params: {
   search?: string;
   sortBy?: SortField;
   sortDir?: SortDir;
+  page?: number;
 }) {
   return useQuery({
     queryKey: ['files', params],
@@ -19,6 +20,8 @@ export function useFiles(params: {
           search: params.search,
           sortBy: params.sortBy ?? 'updatedAt',
           sortDir: params.sortDir ?? 'desc',
+          page: params.page ?? 1,
+          limit: 500,
         },
       });
       return res.data as { files: DriveFile[]; pagination: any };
