@@ -391,10 +391,18 @@ filesRouter.put('/:id/move', async (req: Request, res: Response) => {
 
 filesRouter.post('/bulk-trash', async (req: Request, res: Response) => {
   const user = req.user as any;
-  const { fileIds = [], folderIds = [] } = req.body as { fileIds?: string[]; folderIds?: string[] };
+  const { fileIds = [], folderIds = [], trashRootFiles = false } = req.body as {
+    fileIds?: string[];
+    folderIds?: string[];
+    trashRootFiles?: boolean;
+  };
 
-  if (!Array.isArray(fileIds) || !Array.isArray(folderIds) || (fileIds.length === 0 && folderIds.length === 0)) {
-    res.status(400).json({ error: 'Provide at least one fileId or folderId.' });
+  if (!Array.isArray(fileIds) || !Array.isArray(folderIds)) {
+    res.status(400).json({ error: 'fileIds and folderIds must be arrays.' });
+    return;
+  }
+  if (fileIds.length === 0 && folderIds.length === 0 && !trashRootFiles) {
+    res.status(400).json({ error: 'Provide at least one fileId, folderId, or trashRootFiles: true.' });
     return;
   }
 
@@ -445,6 +453,17 @@ filesRouter.post('/bulk-trash', async (req: Request, res: Response) => {
     }));
   }
 
+  if (trashRootFiles && fileIds.length === 0) {
+    // Trash all root-level files (no folderId) owned by user
+    const rootFileCount = await prisma.file.count({
+      where: { ownerId: user.id, folderId: null, isTrashed: false },
+    });
+    ops.push(prisma.file.updateMany({
+      where: { ownerId: user.id, folderId: null, isTrashed: false },
+      data: { isTrashed: true, trashedAt: now },
+    }));
+  }
+
   if (allFolderIds.length > 0) {
     ops.push(prisma.folder.updateMany({
       where: { id: { in: allFolderIds } },
@@ -461,7 +480,7 @@ filesRouter.post('/bulk-trash', async (req: Request, res: Response) => {
 
   const totalTrashed = fileIds.length + allFolderIds.length;
   await auditFromRequest(req, AuditAction.FILE_DELETED, {
-    details: { bulkTrash: true, fileCount: fileIds.length, folderCount: folderIds.length },
+    details: { bulkTrash: true, fileCount: fileIds.length, folderCount: folderIds.length, trashRootFiles },
   });
   res.json({ message: `${totalTrashed} items moved to trash.` });
 });

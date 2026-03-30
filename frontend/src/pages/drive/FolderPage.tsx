@@ -1,6 +1,6 @@
 import { useState, useEffect, Fragment, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { Grid, List, FolderPlus, ChevronDown, Share2, Pencil, X, Trash2 } from 'lucide-react';
+import { Grid, List, FolderPlus, ChevronDown, Share2, Pencil, X, Trash2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Dialog, Transition } from '@headlessui/react';
 import { useFolderContents, useFolder, useTrashFolder, useStarFolder, useMoveFolder, useRenameFolder, useCreateFolder } from '../../hooks/useFolders';
 import { useTrashFile, useStarFile, useMoveFile, useRenameFile, useBulkTrash, getFileDownloadUrl } from '../../hooks/useFiles';
@@ -93,8 +93,10 @@ export function FolderPage() {
   const [autoCreateFolder, setAutoCreateFolder] = useState<{ dragged: DragDropPayload; target: DragDropPayload } | null>(null);
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [confirmBulkTrash, setConfirmBulkTrash] = useState(false);
+  const [filePage, setFilePage] = useState(1);
+  const [selectAllMode, setSelectAllMode] = useState(false);
 
-  const { data: folderContents, isLoading } = useFolderContents(folderId ?? null, sortBy, sortDir);
+  const { data: folderContents, isLoading } = useFolderContents(folderId ?? null, sortBy, sortDir, filePage);
   const { data: folderData } = useFolder(folderId ?? '');
 
   // Open file preview from search result URL (?preview=fileId)
@@ -145,6 +147,11 @@ export function FolderPage() {
   const permission = folderContents?.permission;
   const isOwner = folderData && user && folderData.ownerId === user.id;
   const canUpload = permission && ['CONTRIBUTOR', 'EDITOR', 'OWNER'].includes(permission);
+  const pagination = folderContents?.pagination;
+  const fileTotal = pagination?.total ?? files.length;
+  const loadedItems = folders.length + files.length;
+  const totalItems = fileTotal + folders.length;
+  const allLoadedSelected = selectedItems.size > 0 && selectedItems.size === loadedItems;
 
   function handleToggleSelect(item: SelectionItem) {
     setSelectedItems((prev) => {
@@ -154,21 +161,40 @@ export function FolderPage() {
       else next.add(key);
       return next;
     });
+    setSelectAllMode(false);
   }
 
   function handleSelectAll() {
-    const allKeys = [
-      ...folders.map((f: any) => `folder:${f.id}`),
-      ...files.map((f: any) => `file:${f.id}`),
-    ];
-    if (selectedItems.size === allKeys.length) {
+    if (selectAllMode || selectedItems.size === loadedItems) {
       setSelectedItems(new Set());
+      setSelectAllMode(false);
     } else {
+      const allKeys = [
+        ...folders.map((f: any) => `folder:${f.id}`),
+        ...files.map((f: any) => `file:${f.id}`),
+      ];
       setSelectedItems(new Set(allKeys));
+      setSelectAllMode(false);
     }
   }
 
+  function handleSelectAllTotal() {
+    setSelectAllMode(true);
+    setSelectedItems(new Set());
+  }
+
   function handleBulkTrash() {
+    if (selectAllMode) {
+      // All files in this folder
+      bulkTrash.mutate({ fileIds: [], folderIds: [], trashRootFiles: false }, {
+        onSuccess: () => {
+          setSelectedItems(new Set());
+          setSelectAllMode(false);
+          setConfirmBulkTrash(false);
+        },
+      });
+      return;
+    }
     const fileIds: string[] = [];
     const folderIds: string[] = [];
     selectedItems.forEach((key) => {
@@ -303,7 +329,7 @@ export function FolderPage() {
           <div className="flex items-center gap-3 px-4 py-3 bg-brand-50 border border-brand-200 rounded-xl">
             <input
               type="checkbox"
-              checked={selectedItems.size === folders.length + files.length}
+              checked={allLoadedSelected}
               onChange={handleSelectAll}
               className="w-4 h-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500 cursor-pointer"
             />
@@ -326,6 +352,37 @@ export function FolderPage() {
             </button>
           </div>
         )}
+
+        {/* Toolbar row */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+            {loadedItems === totalItems
+              ? `${totalItems} items`
+              : `${loadedItems} of ${totalItems} items`}
+          </div>
+          <div className="flex items-center gap-2">
+            {/* Page navigation */}
+            {fileTotal > 500 && (
+              <div className="flex items-center gap-1 text-xs text-slate-500">
+                <button
+                  onClick={() => setFilePage((p) => Math.max(1, p - 1))}
+                  disabled={filePage <= 1}
+                  className="p-1 rounded hover:bg-slate-100 disabled:opacity-30"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <span className="px-1">Page {filePage}</span>
+                <button
+                  onClick={() => setFilePage((p) => p + 1)}
+                  disabled={filePage >= Math.ceil(fileTotal / 500)}
+                  className="p-1 rounded hover:bg-slate-100 disabled:opacity-30"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
 
         {/* Content */}
         {isLoading ? (

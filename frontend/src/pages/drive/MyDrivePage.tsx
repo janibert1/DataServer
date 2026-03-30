@@ -2,7 +2,7 @@ import { useState, useEffect, Fragment, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   FolderPlus, LayoutGrid, List, ChevronDown,
-  Clock, Star, Trash2
+  Clock, Star, Trash2, ChevronLeft, ChevronRight
 } from 'lucide-react';
 import clsx from 'clsx';
 import { DriveFile, DriveFolder, SortField, SortDir, ViewMode } from '../../types';
@@ -164,10 +164,20 @@ export function MyDrivePage() {
   const [autoCreateFolder, setAutoCreateFolder] = useState<{ dragged: DragDropPayload; target: DragDropPayload } | null>(null);
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [confirmBulkTrash, setConfirmBulkTrash] = useState(false);
+  const [filePage, setFilePage] = useState(1);
+  const [selectAllMode, setSelectAllMode] = useState(false);
 
   const { data: foldersData, isLoading: foldersLoading } = useFolders(null);
-  const { data: filesData, isLoading: filesLoading } = useFiles({ folderId: null, sortBy, sortDir });
+  const { data: filesData, isLoading: filesLoading } = useFiles({ folderId: null, sortBy, sortDir, page: filePage });
   const { data: recentFiles } = useRecentFiles();
+
+  const folders = foldersData?.folders ?? [];
+  const files = filesData?.files ?? [];
+  const folderTotal = foldersData?.total ?? folders.length;
+  const fileTotal = filesData?.pagination?.total ?? files.length;
+  const totalItems = folderTotal + fileTotal;
+  const loadedItems = folders.length + files.length;
+  const allLoadedSelected = selectedItems.size > 0 && selectedItems.size === loadedItems;
 
   // Open file preview from search result URL (?preview=fileId)
   useEffect(() => {
@@ -193,9 +203,6 @@ export function MyDrivePage() {
   const createFolder = useCreateFolder();
   const bulkTrash = useBulkTrash();
 
-  const folders = foldersData ?? [];
-  const files = filesData?.files ?? [];
-
   function handleToggleSelect(item: SelectionItem) {
     setSelectedItems((prev) => {
       const key = `${item.type}:${item.id}`;
@@ -204,21 +211,42 @@ export function MyDrivePage() {
       else next.add(key);
       return next;
     });
+    setSelectAllMode(false);
   }
 
   function handleSelectAll() {
-    const allKeys = [
-      ...folders.map((f) => `folder:${f.id}`),
-      ...files.map((f) => `file:${f.id}`),
-    ];
-    if (selectedItems.size === allKeys.length) {
+    if (selectAllMode || selectedItems.size === loadedItems) {
+      // Deselect all
       setSelectedItems(new Set());
+      setSelectAllMode(false);
     } else {
+      // Select all loaded
+      const allKeys = [
+        ...folders.map((f) => `folder:${f.id}`),
+        ...files.map((f) => `file:${f.id}`),
+      ];
       setSelectedItems(new Set(allKeys));
+      setSelectAllMode(false);
     }
   }
 
+  function handleSelectAllTotal() {
+    // Select all files across all pages (select all mode)
+    setSelectAllMode(true);
+    setSelectedItems(new Set()); // don't store individual keys, just track mode
+  }
+
   function handleBulkTrash() {
+    if (selectAllMode) {
+      bulkTrash.mutate({ fileIds: [], folderIds: [], trashRootFiles: true }, {
+        onSuccess: () => {
+          setSelectedItems(new Set());
+          setSelectAllMode(false);
+          setConfirmBulkTrash(false);
+        },
+      });
+      return;
+    }
     const fileIds: string[] = [];
     const folderIds: string[] = [];
     selectedItems.forEach((key) => {
@@ -402,31 +430,25 @@ export function MyDrivePage() {
         {/* Toolbar */}
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <input
-              type="checkbox"
-              checked={selectedItems.size > 0 && selectedItems.size === folders.length + files.length}
-              onChange={handleSelectAll}
-              className="w-4 h-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500 cursor-pointer"
-              title="Select all"
-            />
-            <h2 className="text-sm font-semibold text-slate-700">
-              {folders.length + files.length} items
-            </h2>
-          </div>
-          <div className="flex items-center gap-2">
-            {/* Sort dropdown */}
             <div className="relative">
               <button
                 onClick={() => setSortDropdownOpen((o) => !o)}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
               >
-                {currentSortLabel}
+                <span className="text-sm font-semibold text-slate-700">
+                  {loadedItems === totalItems
+                    ? `${totalItems} items`
+                    : `${loadedItems} of ${totalItems} items`}
+                </span>
                 <ChevronDown className="w-3.5 h-3.5" />
               </button>
               {sortDropdownOpen && (
                 <>
                   <div className="fixed inset-0 z-10" onClick={() => setSortDropdownOpen(false)} />
-                  <div className="absolute right-0 top-9 z-20 w-44 bg-white rounded-xl shadow-lg border border-slate-100 overflow-hidden">
+                  <div className="absolute left-0 top-9 z-20 w-52 bg-white rounded-xl shadow-lg border border-slate-100 overflow-hidden">
+                    <div className="px-4 py-2 border-b border-slate-50">
+                      <p className="text-xs text-slate-400 uppercase tracking-wide font-medium">Sort by</p>
+                    </div>
                     {SORT_OPTIONS.map((o) => (
                       <button
                         key={o.field}
@@ -442,11 +464,47 @@ export function MyDrivePage() {
                         )}
                       </button>
                     ))}
+                    <div className="border-t border-slate-50 pt-2 pb-1">
+                      <button
+                        onClick={() => {
+                          handleSelectAll();
+                          setSortDropdownOpen(false);
+                        }}
+                        className={clsx(
+                          'w-full flex items-center justify-between px-4 py-2.5 text-sm text-left transition-colors',
+                          selectAllMode ? 'bg-brand-50 text-brand-700 font-medium' : 'text-slate-700 hover:bg-slate-50'
+                        )}
+                      >
+                        {selectAllMode ? '✓ All selected' : 'Select all'}
+                      </button>
+                    </div>
                   </div>
                 </>
               )}
             </div>
 
+            {/* Page navigation */}
+            {fileTotal > 500 && (
+              <div className="flex items-center gap-1 text-xs text-slate-500">
+                <button
+                  onClick={() => setFilePage((p) => Math.max(1, p - 1))}
+                  disabled={filePage <= 1}
+                  className="p-1 rounded hover:bg-slate-100 disabled:opacity-30"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <span className="px-1">Page {filePage}</span>
+                <button
+                  onClick={() => setFilePage((p) => p + 1)}
+                  disabled={filePage >= Math.ceil(fileTotal / 500)}
+                  className="p-1 rounded hover:bg-slate-100 disabled:opacity-30"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
             {/* View toggle */}
             <div className="flex items-center bg-white border border-slate-200 rounded-lg overflow-hidden">
               <button

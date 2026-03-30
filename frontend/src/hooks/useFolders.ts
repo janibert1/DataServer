@@ -10,7 +10,10 @@ export function useFolders(parentId?: string | null) {
       const res = await api.get('/folders', {
         params: { parentId: parentId ?? 'root' },
       });
-      return res.data.folders as DriveFolder[];
+      return {
+        folders: res.data.folders as DriveFolder[],
+        total: res.data.total as number,
+      };
     },
   });
 }
@@ -26,18 +29,19 @@ export function useFolder(id: string) {
   });
 }
 
-export function useFolderContents(folderId: string | null, sortBy = 'name', sortDir = 'asc') {
+export function useFolderContents(folderId: string | null, sortBy = 'name', sortDir = 'asc', page = 1) {
   return useQuery({
-    queryKey: ['folder-contents', folderId, sortBy, sortDir],
+    queryKey: ['folder-contents', folderId, sortBy, sortDir, page],
     queryFn: async () => {
       if (!folderId) return null;
       const res = await api.get(`/folders/${folderId}/contents`, {
-        params: { sortBy, sortDir },
+        params: { sortBy, sortDir, page, limit: 500 },
       });
       return res.data as {
         permission: SharePermission;
         folders: DriveFolder[];
         files: any[];
+        pagination: { page: number; limit: number; total: number; pages: number };
       };
     },
     enabled: !!folderId,

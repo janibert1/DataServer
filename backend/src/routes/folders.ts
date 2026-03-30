@@ -34,16 +34,19 @@ foldersRouter.get('/', async (req: Request, res: Response) => {
     where.parentId = parentId;
   }
 
-  const folders = await prisma.folder.findMany({
-    where,
-    orderBy: { name: 'asc' },
-    select: {
-      id: true, name: true, parentId: true, path: true, depth: true,
-      isShared: true, color: true, description: true, createdAt: true, updatedAt: true,
-      starredBy: { where: { userId: user.id }, select: { id: true } },
-      _count: { select: { files: { where: { isTrashed: false } }, children: { where: { isTrashed: false } } } },
-    },
-  });
+  const [folders, total] = await Promise.all([
+    prisma.folder.findMany({
+      where,
+      orderBy: { name: 'asc' },
+      select: {
+        id: true, name: true, parentId: true, path: true, depth: true,
+        isShared: true, color: true, description: true, createdAt: true, updatedAt: true,
+        starredBy: { where: { userId: user.id }, select: { id: true } },
+        _count: { select: { files: { where: { isTrashed: false } }, children: { where: { isTrashed: false } } } },
+      },
+    }),
+    prisma.folder.count({ where }),
+  ]);
 
   res.json({
     folders: folders.map((f) => ({
@@ -52,6 +55,7 @@ foldersRouter.get('/', async (req: Request, res: Response) => {
       fileCount: f._count.files,
       folderCount: f._count.children,
     })),
+    total,
   });
 });
 
@@ -222,7 +226,7 @@ foldersRouter.get('/:id', async (req: Request, res: Response) => {
 foldersRouter.get('/:id/contents', async (req: Request, res: Response) => {
   const user = req.user as any;
   const { id } = req.params;
-  const { sortBy = 'name', sortDir = 'asc' } = req.query as any;
+  const { sortBy = 'name', sortDir = 'asc', page = '1', limit = '500' } = req.query as any;
 
   const folder = await prisma.folder.findUnique({ where: { id }, select: { ownerId: true, isTrashed: true } });
   if (!folder || folder.isTrashed) {
@@ -239,11 +243,15 @@ foldersRouter.get('/:id/contents', async (req: Request, res: Response) => {
     return;
   }
 
+  const pageNum = Math.max(1, parseInt(page));
+  const limitNum = Math.min(1000, Math.max(1, parseInt(limit)));
+  const skip = (pageNum - 1) * limitNum;
+
   const validSort = ['name', 'createdAt', 'updatedAt', 'size'];
   const sortField = validSort.includes(sortBy) ? sortBy : 'name';
   const sortDirection = sortDir === 'desc' ? 'desc' : 'asc';
 
-  const [subfolders, files] = await Promise.all([
+  const [subfolders, files, totalFiles] = await Promise.all([
     prisma.folder.findMany({
       where: { parentId: id, isTrashed: false, deletedAt: null },
       orderBy: { name: 'asc' },
@@ -256,12 +264,15 @@ foldersRouter.get('/:id/contents', async (req: Request, res: Response) => {
     prisma.file.findMany({
       where: { folderId: id, isTrashed: false, status: { not: 'DELETED' } },
       orderBy: { [sortField === 'name' ? 'name' : sortField]: sortDirection },
+      skip,
+      take: limitNum,
       select: {
         id: true, name: true, mimeType: true, size: true,
         thumbnailKey: true, status: true, updatedAt: true, createdAt: true,
         starredBy: { where: { userId: user.id }, select: { id: true } },
       },
     }),
+    prisma.file.count({ where: { folderId: id, isTrashed: false, status: { not: 'DELETED' } } }),
   ]);
 
   res.json({
@@ -273,6 +284,7 @@ foldersRouter.get('/:id/contents', async (req: Request, res: Response) => {
       folderCount: f._count.children,
     })),
     files: files.map((f) => ({ ...f, size: f.size.toString(), isStarred: f.starredBy.length > 0 })),
+    pagination: { page: pageNum, limit: limitNum, total: totalFiles, pages: Math.ceil(totalFiles / limitNum) },
   });
 });
 
