@@ -185,7 +185,7 @@ export function FolderPage() {
 
   function handleBulkTrash() {
     if (selectAllMode) {
-      bulkTrash.mutate({ fileIds: [], folderIds: [], trashAllInFolder: folderId ?? null }, {
+      bulkTrash.mutate({ fileIds: [], folderIds: [], trashAllInFolder: folderId ?? undefined }, {
         onSuccess: () => {
           setSelectedItems(new Set());
           setSelectAllMode(false);
