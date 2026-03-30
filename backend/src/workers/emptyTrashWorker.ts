@@ -23,30 +23,37 @@ async function processEmptyTrash(job: Job<EmptyTrashJobData>): Promise<void> {
 
   while (true) {
     const batch = await prisma.file.findMany({
-      where: { ownerId: userId, isTrashed: true },
+      where: { ownerId: userId, isTrashed: true, status: { not: FileStatus.DELETED } },
       select: { id: true, storageKey: true, size: true },
       take: BATCH,
     });
 
     if (batch.length === 0) break;
 
-    await Promise.all(
-      batch.map(async (file) => {
-        try {
-          await deleteFromS3(file.storageKey);
-        } catch (err) {
-          logger.error('Empty trash: failed to delete from S3', { err, storageKey: file.storageKey });
-        }
-        totalBytes += file.size;
-        fileCount++;
-      })
-    );
+    // Delete from S3 with controlled concurrency (10 at a time)
+    for (let i = 0; i < batch.length; i += 10) {
+      const chunk = batch.slice(i, i + 10);
+      await Promise.all(
+        chunk.map(async (file) => {
+          try {
+            await deleteFromS3(file.storageKey);
+          } catch (err) {
+            logger.error('Empty trash: failed to delete from S3', { err, storageKey: file.storageKey });
+          }
+          totalBytes += file.size;
+        })
+      );
+    }
+
+    fileCount += batch.length;
 
     // Delete these specific files from DB
     await prisma.file.updateMany({
       where: { id: { in: batch.map((f) => f.id) } },
       data: { status: FileStatus.DELETED, deletedAt: new Date() },
     });
+
+    await job.updateProgress(fileCount);
   }
 
   // Step 2: Permanently delete trashed folders

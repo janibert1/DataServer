@@ -151,30 +151,34 @@ filesRouter.post('/empty-trash', async (req: Request, res: Response) => {
     return;
   }
 
-  // Count items for the audit log
-  const [fileCount, folderCount] = await Promise.all([
-    prisma.file.count({ where: { ownerId: user.id, isTrashed: true } }),
-    prisma.folder.count({ where: { ownerId: user.id, isTrashed: true } }),
-  ]);
+  // Quick existence check instead of full COUNT (fast even with 200k+ items)
+  const anyTrashed = await prisma.file.findFirst({
+    where: { ownerId: user.id, isTrashed: true },
+    select: { id: true },
+  });
+  const anyTrashedFolder = !anyTrashed ? await prisma.folder.findFirst({
+    where: { ownerId: user.id, isTrashed: true },
+    select: { id: true },
+  }) : null;
 
-  if (fileCount === 0 && folderCount === 0) {
+  if (!anyTrashed && !anyTrashedFolder) {
     res.json({ message: 'Trash is already empty.', count: 0 });
     return;
   }
 
-  // Enqueue background job
+  // Enqueue background job — counting happens in the worker, not here
   const job = await emptyTrashQueue.add('empty-trash', { userId: user.id }, {
-    jobId: `empty-trash:${user.id}`, // one job per user at a time
+    jobId: `empty-trash:${user.id}`,
   });
 
   await auditFromRequest(req, AuditAction.FILE_DELETED, {
-    details: { emptyTrash: true, jobId: job.id, fileCount, folderCount },
+    details: { emptyTrash: true, jobId: job.id },
   });
 
   res.json({
     message: `Emptying trash in the background. You will be notified when done.`,
     jobId: job.id,
-    estimate: fileCount + folderCount,
+    status: 'processing',
   });
 });
 
