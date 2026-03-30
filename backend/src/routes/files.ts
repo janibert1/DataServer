@@ -9,7 +9,7 @@ import { prisma } from '../lib/prisma';
 import { uploadToS3, getSignedDownloadUrl, deleteFromS3, buildStorageKey, getObjectStream } from '../lib/s3';
 import { auditFromRequest } from '../services/auditService';
 import { checkFileAccess, getEffectivePermission } from '../services/sharingService';
-import { checkQuota, incrementUsage, decrementUsage } from '../services/quotaService';
+import { checkQuota, incrementUsage, decrementUsage, decrementUsageTotal } from '../services/quotaService';
 import { checkTotalCapacity } from '../services/storageCapacityService';
 import { AuditAction, FileStatus, SharePermission } from '@prisma/client';
 import { logger } from '../lib/logger';
@@ -654,19 +654,28 @@ filesRouter.post('/empty-trash', async (req: Request, res: Response) => {
     select: { id: true, storageKey: true, size: true },
   });
 
+  let totalBytes = BigInt(0);
   for (const file of trashedFiles) {
     try {
       await deleteFromS3(file.storageKey);
-      await decrementUsage(user.id, file.size);
     } catch (err) {
-      logger.error('Failed to delete file from S3 during trash empty', { err });
+      logger.error('Failed to delete file from S3 during trash empty', { err, storageKey: file.storageKey });
     }
+    totalBytes += file.size;
   }
 
-  await prisma.file.updateMany({
-    where: { ownerId: user.id, isTrashed: true },
-    data: { status: FileStatus.DELETED, deletedAt: new Date() },
-  });
+  // Batch DB update — 500 rows at a time
+  const BATCH = 500;
+  let deleted = 0;
+  while (true) {
+    const result = await prisma.file.updateMany({
+      where: { ownerId: user.id, isTrashed: true },
+      data: { status: FileStatus.DELETED, deletedAt: new Date() },
+      take: BATCH,
+    });
+    deleted += result.count;
+    if (result.count < BATCH) break;
+  }
 
   // Also permanently delete trashed folders
   await prisma.folder.updateMany({
@@ -674,5 +683,7 @@ filesRouter.post('/empty-trash', async (req: Request, res: Response) => {
     data: { deletedAt: new Date() },
   });
 
-  res.json({ message: `Permanently deleted ${trashedFiles.length} file(s).`, count: trashedFiles.length });
+  await decrementUsageTotal(user.id, totalBytes);
+
+  res.json({ message: `Permanently deleted ${deleted} file(s).`, count: deleted });
 });

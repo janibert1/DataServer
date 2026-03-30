@@ -27,6 +27,14 @@ export async function decrementUsage(userId: string, bytes: bigint): Promise<voi
   });
 }
 
+export async function decrementUsageTotal(userId: string, totalBytes: bigint): Promise<void> {
+  if (totalBytes <= 0) return;
+  await prisma.user.update({
+    where: { id: userId },
+    data: { storageUsedBytes: { decrement: totalBytes } },
+  });
+}
+
 export async function getUserQuotaInfo(userId: string) {
   const user = await prisma.user.findUnique({
     where: { id: userId },
