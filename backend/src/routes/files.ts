@@ -461,18 +461,23 @@ filesRouter.post('/bulk-trash', async (req: Request, res: Response) => {
   const descendantIds = folderIds.length > 0 ? await getDescendantFolderIds(folderIds) : [];
   const allFolderIds = [...folderIds, ...descendantIds];
 
-  // Batch-trash helper — updates 500 rows at a time to avoid long locks
+  // Batch-trash helper — find IDs first, then update by ID list to avoid long locks
   async function trashFilesInBatches(where: any, trashedAt: Date) {
     const BATCH = 500;
     let total = 0;
     while (true) {
-      const result = await prisma.file.updateMany({
+      const files = await prisma.file.findMany({
         where: { ...where, isTrashed: false },
-        data: { isTrashed: true, trashedAt },
+        select: { id: true },
         take: BATCH,
       });
-      total += result.count;
-      if (result.count < BATCH) break;
+      if (files.length === 0) break;
+      await prisma.file.updateMany({
+        where: { id: { in: files.map((f) => f.id) }, isTrashed: false },
+        data: { isTrashed: true, trashedAt },
+      });
+      total += files.length;
+      if (files.length < BATCH) break;
     }
     return total;
   }
@@ -664,17 +669,22 @@ filesRouter.post('/empty-trash', async (req: Request, res: Response) => {
     totalBytes += file.size;
   }
 
-  // Batch DB update — 500 rows at a time
+  // Batch DB update — find IDs first, then update by ID list to avoid long locks
   const BATCH = 500;
   let deleted = 0;
   while (true) {
-    const result = await prisma.file.updateMany({
+    const files = await prisma.file.findMany({
       where: { ownerId: user.id, isTrashed: true },
-      data: { status: FileStatus.DELETED, deletedAt: new Date() },
+      select: { id: true },
       take: BATCH,
     });
-    deleted += result.count;
-    if (result.count < BATCH) break;
+    if (files.length === 0) break;
+    await prisma.file.updateMany({
+      where: { id: { in: files.map((f) => f.id) } },
+      data: { status: FileStatus.DELETED, deletedAt: new Date() },
+    });
+    deleted += files.length;
+    if (files.length < BATCH) break;
   }
 
   // Also permanently delete trashed folders
