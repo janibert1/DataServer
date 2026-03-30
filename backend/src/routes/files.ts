@@ -23,10 +23,10 @@ filesRouter.use(requireAuth, requireVerifiedEmail);
 
 filesRouter.get('/', async (req: Request, res: Response) => {
   const user = req.user as any;
-  const { search, folderId, sortBy = 'updatedAt', sortDir = 'desc', page = '1', limit = '50' } = req.query as any;
+  const { search, folderId, sortBy = 'updatedAt', sortDir = 'desc', page = '1', limit = '500' } = req.query as any;
 
   const pageNum = Math.max(1, parseInt(page));
-  const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
+  const limitNum = Math.min(1000, Math.max(1, parseInt(limit)));
   const skip = (pageNum - 1) * limitNum;
 
   const where: any = {
