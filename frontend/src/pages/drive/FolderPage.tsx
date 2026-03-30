@@ -1,10 +1,10 @@
 import { useState, useEffect, Fragment, useRef } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
-import { Grid, List, FolderPlus, ChevronDown, Share2, Pencil, X } from 'lucide-react';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Grid, List, FolderPlus, ChevronDown, Share2, Pencil, X, Trash2 } from 'lucide-react';
 import { Dialog, Transition } from '@headlessui/react';
 import { useFolderContents, useFolder, useTrashFolder, useStarFolder, useMoveFolder, useRenameFolder, useCreateFolder } from '../../hooks/useFolders';
-import { useTrashFile, useStarFile, useMoveFile, useRenameFile, getFileDownloadUrl } from '../../hooks/useFiles';
-import { FileGrid, DragDropPayload } from '../../components/files/FileGrid';
+import { useTrashFile, useStarFile, useMoveFile, useRenameFile, useBulkTrash, getFileDownloadUrl } from '../../hooks/useFiles';
+import { FileGrid, DragDropPayload, SelectionItem } from '../../components/files/FileGrid';
 import { FileList } from '../../components/files/FileList';
 import { FilePreviewModal } from '../../components/files/FilePreviewModal';
 import { UploadDropzone, UploadButton } from '../../components/files/UploadDropzone';
@@ -83,6 +83,7 @@ export function FolderPage() {
   const [sortBy, setSortBy] = useState<SortField>('name');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [showCreateFolder, setShowCreateFolder] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
   const [previewFile, setPreviewFile] = useState<DriveFile | null>(null);
   const [showShare, setShowShare] = useState(false);
   const [breadcrumbs, setBreadcrumbs] = useState<BreadcrumbItem[]>([]);
@@ -90,9 +91,23 @@ export function FolderPage() {
   const [confirmTrash, setConfirmTrash] = useState<{ type: 'file' | 'folder'; id: string; name: string } | null>(null);
   const [moveTarget, setMoveTarget] = useState<{ type: 'file' | 'folder'; id: string; name: string } | null>(null);
   const [autoCreateFolder, setAutoCreateFolder] = useState<{ dragged: DragDropPayload; target: DragDropPayload } | null>(null);
+  const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
+  const [confirmBulkTrash, setConfirmBulkTrash] = useState(false);
 
   const { data: folderContents, isLoading } = useFolderContents(folderId ?? null, sortBy, sortDir);
   const { data: folderData } = useFolder(folderId ?? '');
+
+  // Open file preview from search result URL (?preview=fileId)
+  useEffect(() => {
+    const previewId = searchParams.get('preview');
+    if (previewId && folderContents?.files) {
+      const file = folderContents.files.find((f: any) => f.id === previewId);
+      if (file) {
+        setPreviewFile(file);
+        setSearchParams({}, { replace: true });
+      }
+    }
+  }, [searchParams, folderContents]);
   const trashFile = useTrashFile();
   const starFile = useStarFile();
   const trashFolder = useTrashFolder();
@@ -102,6 +117,7 @@ export function FolderPage() {
   const renameFile = useRenameFile();
   const renameFolder = useRenameFolder();
   const createFolder = useCreateFolder();
+  const bulkTrash = useBulkTrash();
 
   // Build breadcrumb chain
   useEffect(() => {
@@ -129,6 +145,44 @@ export function FolderPage() {
   const permission = folderContents?.permission;
   const isOwner = folderData && user && folderData.ownerId === user.id;
   const canUpload = permission && ['CONTRIBUTOR', 'EDITOR', 'OWNER'].includes(permission);
+
+  function handleToggleSelect(item: SelectionItem) {
+    setSelectedItems((prev) => {
+      const key = `${item.type}:${item.id}`;
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  function handleSelectAll() {
+    const allKeys = [
+      ...folders.map((f: any) => `folder:${f.id}`),
+      ...files.map((f: any) => `file:${f.id}`),
+    ];
+    if (selectedItems.size === allKeys.length) {
+      setSelectedItems(new Set());
+    } else {
+      setSelectedItems(new Set(allKeys));
+    }
+  }
+
+  function handleBulkTrash() {
+    const fileIds: string[] = [];
+    const folderIds: string[] = [];
+    selectedItems.forEach((key) => {
+      const [type, id] = key.split(':');
+      if (type === 'file') fileIds.push(id);
+      else folderIds.push(id);
+    });
+    bulkTrash.mutate({ fileIds, folderIds }, {
+      onSuccess: () => {
+        setSelectedItems(new Set());
+        setConfirmBulkTrash(false);
+      },
+    });
+  }
 
   const handleFileAction = (action: string, file: DriveFile) => {
     switch (action) {
@@ -244,6 +298,35 @@ export function FolderPage() {
           </div>
         </div>
 
+        {/* Bulk action bar */}
+        {selectedItems.size > 0 && (
+          <div className="flex items-center gap-3 px-4 py-3 bg-brand-50 border border-brand-200 rounded-xl">
+            <input
+              type="checkbox"
+              checked={selectedItems.size === folders.length + files.length}
+              onChange={handleSelectAll}
+              className="w-4 h-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500 cursor-pointer"
+            />
+            <span className="text-sm font-medium text-brand-800">
+              {selectedItems.size} selected
+            </span>
+            <div className="flex-1" />
+            <button
+              onClick={() => setConfirmBulkTrash(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-red-700 bg-red-100 rounded-lg hover:bg-red-200 transition-colors"
+            >
+              <Trash2 className="w-4 h-4" />
+              Trash selected
+            </button>
+            <button
+              onClick={() => setSelectedItems(new Set())}
+              className="px-3 py-1.5 text-sm font-medium text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+
         {/* Content */}
         {isLoading ? (
           <div className="flex justify-center py-20"><LoadingSpinner size="lg" /></div>
@@ -264,6 +347,8 @@ export function FolderPage() {
             onFolderAction={handleFolderAction}
             onDropOnFolder={handleDropOnFolder}
             onDropOnItem={handleDropOnItem}
+            selectedItems={selectedItems}
+            onToggleSelect={handleToggleSelect}
           />
         ) : (
           <FileList
@@ -281,6 +366,8 @@ export function FolderPage() {
             }}
             onDropOnFolder={handleDropOnFolder}
             onDropOnItem={handleDropOnItem}
+            selectedItems={selectedItems}
+            onToggleSelect={handleToggleSelect}
           />
         )}
       </div>
@@ -335,6 +422,17 @@ export function FolderPage() {
         confirmLabel="Move to trash"
         variant="danger"
         isLoading={trashFile.isPending || trashFolder.isPending}
+      />
+
+      <ConfirmDialog
+        open={confirmBulkTrash}
+        onClose={() => setConfirmBulkTrash(false)}
+        onConfirm={handleBulkTrash}
+        title={`Move ${selectedItems.size} items to trash?`}
+        description="You can restore them from the trash within 30 days."
+        confirmLabel="Move to trash"
+        variant="danger"
+        isLoading={bulkTrash.isPending}
       />
     </UploadDropzone>
   );

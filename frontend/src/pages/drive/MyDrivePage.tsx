@@ -1,17 +1,17 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   FolderPlus, LayoutGrid, List, ChevronDown,
-  Clock, Star
+  Clock, Star, Trash2
 } from 'lucide-react';
 import clsx from 'clsx';
 import { DriveFile, DriveFolder, SortField, SortDir, ViewMode } from '../../types';
 import { useFolders, useCreateFolder, useMoveFolder, useStarFolder, useTrashFolder, useRenameFolder } from '../../hooks/useFolders';
 import {
   useFiles, useRecentFiles, useTrashFile, useStarFile,
-  useRenameFile, useDeleteFilePermanently, useMoveFile, getFileDownloadUrl
+  useRenameFile, useDeleteFilePermanently, useMoveFile, useBulkTrash, getFileDownloadUrl
 } from '../../hooks/useFiles';
-import { FileGrid, DragDropPayload } from '../../components/files/FileGrid';
+import { FileGrid, DragDropPayload, SelectionItem } from '../../components/files/FileGrid';
 import { FileList } from '../../components/files/FileList';
 import { FilePreviewModal } from '../../components/files/FilePreviewModal';
 import { UploadDropzone, UploadButton } from '../../components/files/UploadDropzone';
@@ -150,6 +150,7 @@ const SORT_OPTIONS: { field: SortField; label: string }[] = [
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export function MyDrivePage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
   const [sortBy, setSortBy] = useState<SortField>('updatedAt');
@@ -164,10 +165,24 @@ export function MyDrivePage() {
   const [confirmDeleteFile, setConfirmDeleteFile] = useState<DriveFile | null>(null);
   const [moveTarget, setMoveTarget] = useState<{ type: 'file' | 'folder'; id: string; name: string } | null>(null);
   const [autoCreateFolder, setAutoCreateFolder] = useState<{ dragged: DragDropPayload; target: DragDropPayload } | null>(null);
+  const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
+  const [confirmBulkTrash, setConfirmBulkTrash] = useState(false);
 
   const { data: foldersData, isLoading: foldersLoading } = useFolders(null);
   const { data: filesData, isLoading: filesLoading } = useFiles({ folderId: null, sortBy, sortDir });
   const { data: recentFiles } = useRecentFiles();
+
+  // Open file preview from search result URL (?preview=fileId)
+  useEffect(() => {
+    const previewId = searchParams.get('preview');
+    if (previewId && filesData?.files) {
+      const file = filesData.files.find((f: DriveFile) => f.id === previewId);
+      if (file) {
+        setPreviewFile(file);
+        setSearchParams({}, { replace: true });
+      }
+    }
+  }, [searchParams, filesData]);
 
   const trashFile = useTrashFile();
   const trashFolder = useTrashFolder();
@@ -179,9 +194,48 @@ export function MyDrivePage() {
   const moveFile = useMoveFile();
   const moveFolder = useMoveFolder();
   const createFolder = useCreateFolder();
+  const bulkTrash = useBulkTrash();
 
   const folders = foldersData ?? [];
   const files = filesData?.files ?? [];
+
+  function handleToggleSelect(item: SelectionItem) {
+    setSelectedItems((prev) => {
+      const key = `${item.type}:${item.id}`;
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  function handleSelectAll() {
+    const allKeys = [
+      ...folders.map((f) => `folder:${f.id}`),
+      ...files.map((f) => `file:${f.id}`),
+    ];
+    if (selectedItems.size === allKeys.length) {
+      setSelectedItems(new Set());
+    } else {
+      setSelectedItems(new Set(allKeys));
+    }
+  }
+
+  function handleBulkTrash() {
+    const fileIds: string[] = [];
+    const folderIds: string[] = [];
+    selectedItems.forEach((key) => {
+      const [type, id] = key.split(':');
+      if (type === 'file') fileIds.push(id);
+      else folderIds.push(id);
+    });
+    bulkTrash.mutate({ fileIds, folderIds }, {
+      onSuccess: () => {
+        setSelectedItems(new Set());
+        setConfirmBulkTrash(false);
+      },
+    });
+  }
   const isLoading = foldersLoading || filesLoading;
 
   function handleSort(field: SortField) {
@@ -319,11 +373,49 @@ export function MyDrivePage() {
           </section>
         )}
 
+        {/* Bulk action bar */}
+        {selectedItems.size > 0 && (
+          <div className="flex items-center gap-3 px-4 py-3 bg-brand-50 border border-brand-200 rounded-xl">
+            <input
+              type="checkbox"
+              checked={selectedItems.size === folders.length + files.length}
+              onChange={handleSelectAll}
+              className="w-4 h-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500 cursor-pointer"
+            />
+            <span className="text-sm font-medium text-brand-800">
+              {selectedItems.size} selected
+            </span>
+            <div className="flex-1" />
+            <button
+              onClick={() => setConfirmBulkTrash(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-red-700 bg-red-100 rounded-lg hover:bg-red-200 transition-colors"
+            >
+              <Trash2 className="w-4 h-4" />
+              Trash selected
+            </button>
+            <button
+              onClick={() => setSelectedItems(new Set())}
+              className="px-3 py-1.5 text-sm font-medium text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+
         {/* Toolbar */}
         <div className="flex items-center justify-between gap-4">
-          <h2 className="text-sm font-semibold text-slate-700">
-            {folders.length + files.length} items
-          </h2>
+          <div className="flex items-center gap-3">
+            <input
+              type="checkbox"
+              checked={selectedItems.size > 0 && selectedItems.size === folders.length + files.length}
+              onChange={handleSelectAll}
+              className="w-4 h-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500 cursor-pointer"
+              title="Select all"
+            />
+            <h2 className="text-sm font-semibold text-slate-700">
+              {folders.length + files.length} items
+            </h2>
+          </div>
           <div className="flex items-center gap-2">
             {/* Sort dropdown */}
             <div className="relative">
@@ -410,6 +502,8 @@ export function MyDrivePage() {
             onFolderAction={handleFolderAction}
             onDropOnFolder={handleDropOnFolder}
             onDropOnItem={handleDropOnItem}
+            selectedItems={selectedItems}
+            onToggleSelect={handleToggleSelect}
           />
         ) : (
           <FileList
@@ -424,6 +518,8 @@ export function MyDrivePage() {
             onSort={handleSort}
             onDropOnFolder={handleDropOnFolder}
             onDropOnItem={handleDropOnItem}
+            selectedItems={selectedItems}
+            onToggleSelect={handleToggleSelect}
           />
         )}
       </div>
@@ -483,6 +579,17 @@ export function MyDrivePage() {
         confirmLabel="Move to trash"
         variant="danger"
         isLoading={trashFile.isPending || trashFolder.isPending}
+      />
+
+      <ConfirmDialog
+        open={confirmBulkTrash}
+        onClose={() => setConfirmBulkTrash(false)}
+        onConfirm={handleBulkTrash}
+        title={`Move ${selectedItems.size} items to trash?`}
+        description="You can restore them from the trash within 30 days."
+        confirmLabel="Move to trash"
+        variant="danger"
+        isLoading={bulkTrash.isPending}
       />
 
       <ConfirmDialog

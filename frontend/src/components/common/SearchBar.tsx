@@ -10,6 +10,7 @@ interface SearchResult {
   type: 'file' | 'folder';
   path: string;
   mimeType?: string;
+  folderId?: string | null;
 }
 
 function useDebounce<T>(value: T, delay: number): T {
@@ -50,6 +51,7 @@ export function SearchBar() {
           type: 'file' as const,
           path: f.path,
           mimeType: f.mimeType,
+          folderId: f.folderId,
         }));
         const folderResults: SearchResult[] = (foldersRes.data.folders ?? []).map((f: any) => ({
           id: f.id,
@@ -70,8 +72,10 @@ export function SearchBar() {
     setIsOpen(false);
     if (result.type === 'folder') {
       navigate(`/drive/folder/${result.id}`);
+    } else if (result.folderId) {
+      navigate(`/drive/folder/${result.folderId}?preview=${result.id}`);
     } else {
-      navigate(`/drive/my-drive?file=${result.id}`);
+      navigate(`/drive/my-drive?preview=${result.id}`);
     }
   }, [navigate]);
 

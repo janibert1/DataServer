@@ -12,6 +12,11 @@ export interface DragDropPayload {
   name: string;
 }
 
+export interface SelectionItem {
+  type: 'file' | 'folder';
+  id: string;
+}
+
 interface Props {
   files: DriveFile[];
   folders: DriveFolder[];
@@ -22,6 +27,8 @@ interface Props {
   isTrash?: boolean;
   onDropOnFolder?: (dragged: DragDropPayload, targetFolderId: string) => void;
   onDropOnItem?: (dragged: DragDropPayload, target: DragDropPayload) => void;
+  selectedItems?: Set<string>;
+  onToggleSelect?: (item: SelectionItem) => void;
 }
 
 function formatBytes(bytes: string | number): string {
@@ -50,11 +57,15 @@ function FolderCard({
   onDoubleClick,
   onAction,
   onDropOnFolder,
+  isSelected,
+  onToggleSelect,
 }: {
   folder: DriveFolder;
   onDoubleClick: () => void;
   onAction: (action: string) => void;
   onDropOnFolder?: (dragged: DragDropPayload) => void;
+  isSelected?: boolean;
+  onToggleSelect?: () => void;
 }) {
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -87,9 +98,27 @@ function FolderCard({
           'group relative flex flex-col p-4 bg-white rounded-xl border cursor-pointer transition-all duration-150 select-none',
           dragOver
             ? 'border-brand-400 bg-brand-50 shadow-md ring-2 ring-brand-200'
+            : isSelected
+            ? 'border-brand-400 bg-brand-50 ring-2 ring-brand-200'
             : 'border-slate-200 hover:border-brand-300 hover:shadow-card-hover'
         )}
       >
+        {onToggleSelect && (
+          <div
+            className={clsx(
+              'absolute top-2 left-2 z-10 transition-opacity',
+              isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+            )}
+          >
+            <input
+              type="checkbox"
+              checked={isSelected}
+              onChange={(e) => { e.stopPropagation(); onToggleSelect(); }}
+              onClick={(e) => e.stopPropagation()}
+              className="w-4 h-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500 cursor-pointer"
+            />
+          </div>
+        )}
         <div className="flex items-start justify-between mb-3">
           <div
             className="w-12 h-12 rounded-xl flex items-center justify-center"
@@ -140,12 +169,16 @@ function FileCard({
   onAction,
   isTrash,
   onDropOnItem,
+  isSelected,
+  onToggleSelect,
 }: {
   file: DriveFile;
   onClick: () => void;
   onAction: (action: string) => void;
   isTrash?: boolean;
   onDropOnItem?: (dragged: DragDropPayload) => void;
+  isSelected?: boolean;
+  onToggleSelect?: () => void;
 }) {
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -179,11 +212,29 @@ function FileCard({
           'group relative flex flex-col bg-white rounded-xl border cursor-pointer transition-all duration-150 select-none overflow-hidden',
           dragOver
             ? 'border-brand-400 bg-brand-50 shadow-md ring-2 ring-brand-200'
+            : isSelected
+            ? 'border-brand-400 bg-brand-50 ring-2 ring-brand-200'
             : 'border-slate-200 hover:border-brand-300 hover:shadow-card-hover'
         )}
       >
         {/* Thumbnail area */}
         <div className="aspect-video bg-slate-50 flex items-center justify-center relative overflow-hidden">
+          {onToggleSelect && (
+            <div
+              className={clsx(
+                'absolute top-2 left-2 z-10 transition-opacity',
+                isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+              )}
+            >
+              <input
+                type="checkbox"
+                checked={isSelected}
+                onChange={(e) => { e.stopPropagation(); onToggleSelect(); }}
+                onClick={(e) => e.stopPropagation()}
+                className="w-4 h-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500 cursor-pointer"
+              />
+            </div>
+          )}
           {isImage && file.thumbnailKey ? (
             <img
               src={`/api/files/${file.id}/preview`}
@@ -246,7 +297,7 @@ function FileCard({
   );
 }
 
-export function FileGrid({ files, folders, onFileClick, onFolderClick, onFileAction, onFolderAction, isTrash, onDropOnFolder, onDropOnItem }: Props) {
+export function FileGrid({ files, folders, onFileClick, onFolderClick, onFileAction, onFolderAction, isTrash, onDropOnFolder, onDropOnItem, selectedItems, onToggleSelect }: Props) {
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
       {folders.map((folder) => (
@@ -256,6 +307,8 @@ export function FileGrid({ files, folders, onFileClick, onFolderClick, onFileAct
           onDoubleClick={() => onFolderClick(folder)}
           onAction={(action) => onFolderAction(action, folder)}
           onDropOnFolder={onDropOnFolder ? (dragged) => onDropOnFolder(dragged, folder.id) : undefined}
+          isSelected={selectedItems?.has(`folder:${folder.id}`)}
+          onToggleSelect={onToggleSelect ? () => onToggleSelect({ type: 'folder', id: folder.id }) : undefined}
         />
       ))}
       {files.map((file) => (
@@ -266,6 +319,8 @@ export function FileGrid({ files, folders, onFileClick, onFolderClick, onFileAct
           onAction={(action) => onFileAction(action, file)}
           isTrash={isTrash}
           onDropOnItem={onDropOnItem ? (dragged) => onDropOnItem(dragged, { type: 'file', id: file.id, name: file.name }) : undefined}
+          isSelected={selectedItems?.has(`file:${file.id}`)}
+          onToggleSelect={onToggleSelect ? () => onToggleSelect({ type: 'file', id: file.id }) : undefined}
         />
       ))}
     </div>

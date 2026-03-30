@@ -389,6 +389,83 @@ filesRouter.put('/:id/move', async (req: Request, res: Response) => {
 
 // ─── Trash / restore ─────────────────────────────────────────
 
+filesRouter.post('/bulk-trash', async (req: Request, res: Response) => {
+  const user = req.user as any;
+  const { fileIds = [], folderIds = [] } = req.body as { fileIds?: string[]; folderIds?: string[] };
+
+  if (!Array.isArray(fileIds) || !Array.isArray(folderIds) || (fileIds.length === 0 && folderIds.length === 0)) {
+    res.status(400).json({ error: 'Provide at least one fileId or folderId.' });
+    return;
+  }
+
+  const now = new Date();
+
+  // Validate ownership of all files
+  if (fileIds.length > 0) {
+    const fileCount = await prisma.file.count({
+      where: { id: { in: fileIds }, ownerId: user.id, isTrashed: false },
+    });
+    if (fileCount !== fileIds.length) {
+      res.status(403).json({ error: 'Some files not found or not owned by you.' });
+      return;
+    }
+  }
+
+  // Validate ownership of all folders
+  if (folderIds.length > 0) {
+    const folderCount = await prisma.folder.count({
+      where: { id: { in: folderIds }, ownerId: user.id, isTrashed: false },
+    });
+    if (folderCount !== folderIds.length) {
+      res.status(403).json({ error: 'Some folders not found or not owned by you.' });
+      return;
+    }
+  }
+
+  // Recursively collect all descendant folder IDs
+  async function getDescendantFolderIds(parentIds: string[]): Promise<string[]> {
+    const children = await prisma.folder.findMany({
+      where: { parentId: { in: parentIds }, isTrashed: false },
+      select: { id: true },
+    });
+    if (children.length === 0) return [];
+    const childIds = children.map((c) => c.id);
+    return [...childIds, ...await getDescendantFolderIds(childIds)];
+  }
+
+  const descendantIds = folderIds.length > 0 ? await getDescendantFolderIds(folderIds) : [];
+  const allFolderIds = [...folderIds, ...descendantIds];
+
+  const ops: any[] = [];
+
+  if (fileIds.length > 0) {
+    ops.push(prisma.file.updateMany({
+      where: { id: { in: fileIds }, ownerId: user.id },
+      data: { isTrashed: true, trashedAt: now },
+    }));
+  }
+
+  if (allFolderIds.length > 0) {
+    ops.push(prisma.folder.updateMany({
+      where: { id: { in: allFolderIds } },
+      data: { isTrashed: true, trashedAt: now },
+    }));
+    // Also trash files inside the trashed folders
+    ops.push(prisma.file.updateMany({
+      where: { folderId: { in: allFolderIds }, isTrashed: false },
+      data: { isTrashed: true, trashedAt: now },
+    }));
+  }
+
+  await prisma.$transaction(ops);
+
+  const totalTrashed = fileIds.length + allFolderIds.length;
+  await auditFromRequest(req, AuditAction.FILE_DELETED, {
+    details: { bulkTrash: true, fileCount: fileIds.length, folderCount: folderIds.length },
+  });
+  res.json({ message: `${totalTrashed} items moved to trash.` });
+});
+
 filesRouter.post('/:id/trash', async (req: Request, res: Response) => {
   const user = req.user as any;
   const { id } = req.params;

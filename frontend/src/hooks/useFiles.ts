@@ -201,6 +201,21 @@ export function useStarFile() {
   });
 }
 
+export function useBulkTrash() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (params: { fileIds: string[]; folderIds: string[] }) =>
+      api.post('/files/bulk-trash', params),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['files'] });
+      queryClient.invalidateQueries({ queryKey: ['folders'] });
+      queryClient.invalidateQueries({ queryKey: ['folder-contents'] });
+      toast.success(res.data.message);
+    },
+    onError: (err) => toast.error(getErrorMessage(err)),
+  });
+}
+
 export function useEmptyTrash() {
   const queryClient = useQueryClient();
   return useMutation({

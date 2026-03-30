@@ -5,7 +5,7 @@ import clsx from 'clsx';
 import { DriveFile, DriveFolder, SortField, SortDir } from '../../types';
 import { FileIcon } from './FileIcon';
 import { FileContextMenu } from './FileContextMenu';
-import { DragDropPayload } from './FileGrid';
+import { DragDropPayload, SelectionItem } from './FileGrid';
 
 interface Props {
   files: DriveFile[];
@@ -20,6 +20,8 @@ interface Props {
   isTrash?: boolean;
   onDropOnFolder?: (dragged: DragDropPayload, targetFolderId: string) => void;
   onDropOnItem?: (dragged: DragDropPayload, target: DragDropPayload) => void;
+  selectedItems?: Set<string>;
+  onToggleSelect?: (item: SelectionItem) => void;
 }
 
 function formatBytes(bytes: string | number): string {
@@ -71,7 +73,7 @@ function SortHeader({ label, field, current, dir, onSort }: {
 export function FileList({
   files, folders, onFileClick, onFolderClick,
   onFileAction, onFolderAction, sortBy, sortDir, onSort, isTrash,
-  onDropOnFolder, onDropOnItem,
+  onDropOnFolder, onDropOnItem, selectedItems, onToggleSelect,
 }: Props) {
   const [menuState, setMenuState] = useState<{ pos: { x: number; y: number }; item: DriveFile | DriveFolder; type: 'file' | 'folder' } | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
@@ -87,6 +89,7 @@ export function FileList({
       <table className="w-full">
         <thead className="border-b border-slate-100">
           <tr className="bg-slate-50">
+            {onToggleSelect && <th className="w-10 px-3 py-3" />}
             <SortHeader label="Name" field="name" current={sortBy} dir={sortDir} onSort={onSort} />
             <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider hidden md:table-cell">Type</th>
             <SortHeader label="Modified" field="updatedAt" current={sortBy} dir={sortDir} onSort={onSort} />
@@ -114,11 +117,24 @@ export function FileList({
                 'cursor-pointer group transition-colors',
                 dragOverId === folder.id
                   ? 'bg-brand-50 ring-2 ring-inset ring-brand-300'
+                  : selectedItems?.has(`folder:${folder.id}`)
+                  ? 'bg-brand-50'
                   : 'hover:bg-slate-50'
               )}
               onDoubleClick={() => onFolderClick(folder)}
               onContextMenu={(e) => openMenu(e, folder, 'folder')}
             >
+              {onToggleSelect && (
+                <td className="px-3 py-2.5 w-10">
+                  <input
+                    type="checkbox"
+                    checked={selectedItems?.has(`folder:${folder.id}`) ?? false}
+                    onChange={() => onToggleSelect({ type: 'folder', id: folder.id })}
+                    onClick={(e) => e.stopPropagation()}
+                    className="w-4 h-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500 cursor-pointer"
+                  />
+                </td>
+              )}
               <td className="px-4 py-2.5">
                 <div className="flex items-center gap-3">
                   <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
@@ -169,11 +185,24 @@ export function FileList({
                 'cursor-pointer group transition-colors',
                 dragOverId === file.id
                   ? 'bg-brand-50 ring-2 ring-inset ring-brand-200'
+                  : selectedItems?.has(`file:${file.id}`)
+                  ? 'bg-brand-50'
                   : 'hover:bg-slate-50'
               )}
               onClick={() => onFileClick(file)}
               onContextMenu={(e) => openMenu(e, file, 'file')}
             >
+              {onToggleSelect && (
+                <td className="px-3 py-2.5 w-10">
+                  <input
+                    type="checkbox"
+                    checked={selectedItems?.has(`file:${file.id}`) ?? false}
+                    onChange={() => onToggleSelect({ type: 'file', id: file.id })}
+                    onClick={(e) => e.stopPropagation()}
+                    className="w-4 h-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500 cursor-pointer"
+                  />
+                </td>
+              )}
               <td className="px-4 py-2.5">
                 <div className="flex items-center gap-3">
                   <FileIcon mimeType={file.mimeType} className="w-8 h-8 flex-shrink-0" size={16} />
@@ -206,7 +235,7 @@ export function FileList({
 
           {files.length === 0 && folders.length === 0 && (
             <tr>
-              <td colSpan={5} className="py-16 text-center text-sm text-slate-400">
+              <td colSpan={onToggleSelect ? 6 : 5} className="py-16 text-center text-sm text-slate-400">
                 This folder is empty
               </td>
             </tr>

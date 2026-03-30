@@ -25,13 +25,14 @@ foldersRouter.get('/', async (req: Request, res: Response) => {
     deletedAt: null,
   };
 
-  if (parentId === 'root' || !parentId) {
+  if (search) {
+    where.name = { contains: search, mode: 'insensitive' };
+    // Don't constrain parentId — search across all folders
+  } else if (parentId === 'root' || !parentId) {
     where.parentId = null;
   } else {
     where.parentId = parentId;
   }
-
-  if (search) where.name = { contains: search, mode: 'insensitive' };
 
   const folders = await prisma.folder.findMany({
     where,
