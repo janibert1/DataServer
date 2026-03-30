@@ -330,14 +330,19 @@ func (e *Engine) scanLocalChanges() error {
 				if parentPath != "." {
 					if pf, ok := knownFolderPaths[parentPath]; ok {
 						parentID = &pf.RemoteID
+					} else {
+						// Parent folder not known — skip entire subtree to avoid
+						// creating orphaned folders/files at root level
+						log.Warn().Str("path", relPath).Msg("Skipping folder: parent not synced yet")
+						return filepath.SkipDir
 					}
 				}
 
 				setStatus("syncing", fmt.Sprintf("Creating folder %s", relPath))
 				folder, err := e.client.CreateFolder(info.Name(), parentID)
 				if err != nil {
-					log.Error().Err(err).Str("path", relPath).Msg("Create remote folder failed")
-					return nil
+					log.Error().Err(err).Str("path", relPath).Msg("Create remote folder failed, skipping subtree")
+					return filepath.SkipDir
 				}
 
 				lf := LocalFolder{
@@ -361,6 +366,10 @@ func (e *Engine) scanLocalChanges() error {
 			if dirPath != "." {
 				if pf, ok := knownFolderPaths[dirPath]; ok {
 					folderID = pf.RemoteID
+				} else {
+					// Parent folder not synced — skip to avoid uploading to root
+					log.Warn().Str("path", relPath).Msg("Skipping file: parent folder not synced yet")
+					return nil
 				}
 			}
 
@@ -402,6 +411,9 @@ func (e *Engine) scanLocalChanges() error {
 			if dirPath != "." {
 				if pf, ok := knownFolderPaths[dirPath]; ok {
 					folderID = pf.RemoteID
+				} else {
+					log.Warn().Str("path", relPath).Msg("Skipping modified file: parent folder not synced yet")
+					return nil
 				}
 			}
 
