@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Fragment, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   FolderPlus, LayoutGrid, List, ChevronDown,
@@ -25,9 +25,6 @@ import { AutoCreateFolderModal } from '../../components/files/AutoCreateFolderMo
 import { FileIcon } from '../../components/files/FileIcon';
 import { formatDistanceToNow } from 'date-fns';
 import toast from 'react-hot-toast';
-
-// ── Rename Modal ──────────────────────────────────────────────────────────────
-import { Fragment, useRef, useEffect } from 'react';
 import { Dialog, Transition } from '@headlessui/react';
 import { Pencil, X } from 'lucide-react';
 
