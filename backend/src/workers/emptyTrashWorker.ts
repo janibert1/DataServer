@@ -17,24 +17,21 @@ async function processEmptyTrash(job: Job<EmptyTrashJobData>): Promise<void> {
   const { userId } = job.data;
   logger.info('Empty trash job started', { jobId: job.id, userId });
 
-  // Step 1: Fetch all trashed files and delete from S3 in parallel batches
-  let cursor: string | undefined;
+  // Step 1: Fetch and delete S3 objects in batches
   let totalBytes = BigInt(0);
   let fileCount = 0;
 
   while (true) {
-    const files = await prisma.file.findMany({
+    const batch = await prisma.file.findMany({
       where: { ownerId: userId, isTrashed: true },
       select: { id: true, storageKey: true, size: true },
       take: BATCH,
-      ...(cursor ? { skip: 1, where: { ownerId: userId, isTrashed: true, id: { gt: cursor } } } : {}),
     });
 
-    if (files.length === 0) break;
+    if (batch.length === 0) break;
 
-    // Delete from S3 in parallel (with concurrency limit)
     await Promise.all(
-      files.map(async (file) => {
+      batch.map(async (file) => {
         try {
           await deleteFromS3(file.storageKey);
         } catch (err) {
@@ -45,45 +42,23 @@ async function processEmptyTrash(job: Job<EmptyTrashJobData>): Promise<void> {
       })
     );
 
-    cursor = files[files.length - 1].id;
-
-    // Update progress
-    job.progress(fileCount);
-  }
-
-  // Step 2: Batch DB updates — mark files as DELETED
-  let dbDeleted = 0;
-  cursor = undefined;
-
-  while (true) {
-    const files = await prisma.file.findMany({
-      where: { ownerId: userId, isTrashed: true },
-      select: { id: true },
-      take: BATCH,
-      ...(cursor ? { skip: 1, where: { ownerId: userId, isTrashed: true, id: { gt: cursor } } } : {}),
-    });
-
-    if (files.length === 0) break;
-
+    // Delete these specific files from DB
     await prisma.file.updateMany({
-      where: { id: { in: files.map((f) => f.id) } },
+      where: { id: { in: batch.map((f) => f.id) } },
       data: { status: FileStatus.DELETED, deletedAt: new Date() },
     });
-
-    dbDeleted += files.length;
-    cursor = files[files.length - 1].id;
   }
 
-  // Step 3: Permanently delete trashed folders
+  // Step 2: Permanently delete trashed folders
   const folderResult = await prisma.folder.updateMany({
     where: { ownerId: userId, isTrashed: true },
     data: { deletedAt: new Date() },
   });
 
-  // Step 4: Decrement storage usage
+  // Step 3: Decrement storage usage
   await decrementUsageTotal(userId, totalBytes);
 
-  // Step 5: Create in-app notification
+  // Step 4: Create in-app notification
   const folderCount = folderResult.count;
   await createNotification({
     userId,
@@ -107,7 +82,7 @@ export const emptyTrashWorker = new Worker<EmptyTrashJobData>(
   processEmptyTrash,
   {
     connection: { url: config.redis.url },
-    concurrency: 1, // Only one empty-trash job per user should run at a time
+    concurrency: 1,
   }
 );
 
@@ -123,7 +98,6 @@ emptyTrashWorker.on('failed', (job, err) => {
     error: err.message,
   });
 
-  // Notify user of failure
   if (userId && userId !== 'unknown') {
     createNotification({
       userId,
