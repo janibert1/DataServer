@@ -113,14 +113,29 @@ filesRouter.get('/starred', async (req: Request, res: Response) => {
 
 filesRouter.get('/trash', async (req: Request, res: Response) => {
   const user = req.user as any;
-  const files = await prisma.file.findMany({
-    where: { ownerId: user.id, isTrashed: true, status: { not: FileStatus.DELETED } },
-    orderBy: { trashedAt: 'desc' },
-    select: {
-      id: true, name: true, mimeType: true, size: true, trashedAt: true, path: true,
-    },
+  const limit = 500;
+  const page = Math.max(1, parseInt(req.query.page as string) || 1);
+  const skip = (page - 1) * limit;
+
+  const [files, total] = await Promise.all([
+    prisma.file.findMany({
+      where: { ownerId: user.id, isTrashed: true, status: { not: FileStatus.DELETED } },
+      orderBy: { trashedAt: 'desc' },
+      select: {
+        id: true, name: true, mimeType: true, size: true, trashedAt: true, path: true,
+      },
+      take: limit,
+      skip,
+    }),
+    prisma.file.count({
+      where: { ownerId: user.id, isTrashed: true, status: { not: FileStatus.DELETED } },
+    }),
+  ]);
+
+  res.json({
+    files: files.map((f) => ({ ...f, size: f.size.toString() })),
+    pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
   });
-  res.json({ files: files.map((f) => ({ ...f, size: f.size.toString() })) });
 });
 
 // ─── Upload file ─────────────────────────────────────────────

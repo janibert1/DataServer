@@ -49,12 +49,15 @@ export function useStarredFiles() {
   });
 }
 
-export function useTrashedFiles() {
+export function useTrashedFiles(page: number = 1) {
   return useQuery({
-    queryKey: ['files', 'trash'],
+    queryKey: ['files', 'trash', page],
     queryFn: async () => {
-      const res = await api.get('/files/trash');
-      return res.data.files as DriveFile[];
+      const res = await api.get('/files/trash', { params: { page } });
+      return {
+        files: res.data.files as DriveFile[],
+        pagination: res.data.pagination as { page: number; limit: number; total: number; totalPages: number },
+      };
     },
   });
 }

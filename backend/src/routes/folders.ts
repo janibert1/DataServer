@@ -93,17 +93,30 @@ foldersRouter.get('/starred', async (req: Request, res: Response) => {
 
 foldersRouter.get('/trashed', async (req: Request, res: Response) => {
   const user = req.user as any;
+  const limit = 500;
+  const page = Math.max(1, parseInt(req.query.page as string) || 1);
+  const skip = (page - 1) * limit;
 
-  const folders = await prisma.folder.findMany({
-    where: { ownerId: user.id, isTrashed: true, deletedAt: null },
-    orderBy: { trashedAt: 'desc' },
-    select: {
-      id: true, name: true, color: true, trashedAt: true, parentId: true,
-      _count: { select: { files: true, children: true } },
-    },
+  const [folders, total] = await Promise.all([
+    prisma.folder.findMany({
+      where: { ownerId: user.id, isTrashed: true, deletedAt: null },
+      orderBy: { trashedAt: 'desc' },
+      select: {
+        id: true, name: true, color: true, trashedAt: true, parentId: true,
+        _count: { select: { files: true, children: true } },
+      },
+      take: limit,
+      skip,
+    }),
+    prisma.folder.count({
+      where: { ownerId: user.id, isTrashed: true, deletedAt: null },
+    }),
+  ]);
+
+  res.json({
+    folders,
+    pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
   });
-
-  res.json({ folders });
 });
 
 // ─── Permanently delete folder ──────────────────────────────

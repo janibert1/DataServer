@@ -116,12 +116,15 @@ export function useRestoreFolder() {
   });
 }
 
-export function useTrashedFolders() {
+export function useTrashedFolders(page: number = 1) {
   return useQuery({
-    queryKey: ['folders', 'trashed'],
+    queryKey: ['folders', 'trashed', page],
     queryFn: async () => {
-      const res = await api.get('/folders/trashed');
-      return res.data.folders as DriveFolder[];
+      const res = await api.get('/folders/trashed', { params: { page } });
+      return {
+        folders: res.data.folders as DriveFolder[],
+        pagination: res.data.pagination as { page: number; limit: number; total: number; totalPages: number },
+      };
     },
   });
 }
