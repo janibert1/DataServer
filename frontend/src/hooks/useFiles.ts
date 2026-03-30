@@ -251,7 +251,7 @@ export function useEmptyTrashStatus() {
       if (data?.status === 'processing') return 2000;
       return false;
     },
-    initialData: { status: 'idle' as const, progress: 0, jobId: '' },
+    staleTime: 0,
   });
 }
 

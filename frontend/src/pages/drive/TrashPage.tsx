@@ -8,6 +8,8 @@ import { useTrashedFolders, useRestoreFolder, useDeleteFolderPermanently } from 
 import { ConfirmDialog } from '../../components/common/ConfirmDialog';
 import { EmptyState } from '../../components/common/EmptyState';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
+import toast from 'react-hot-toast';
+import { getErrorMessage } from '../../lib/axios';
 
 function formatBytes(bytes: string | number) {
   const n = typeof bytes === 'string' ? parseInt(bytes) : bytes;
@@ -55,12 +57,28 @@ export function TrashPage() {
 
   // Poll for empty-trash completion when processing
   const isProcessing = emptyTrashStatus.data?.status === 'processing';
+  const lastStatusRef = useState<string>('idle');
 
   useEffect(() => {
-    if (emptyTrashStatus.data?.status === 'completed' || emptyTrashStatus.data?.status === 'failed') {
+    const status = emptyTrashStatus.data?.status;
+    if (!status) return;
+
+    if (status === 'processing' && lastStatusRef[0] !== 'processing') {
+      toast.success('Started emptying trash in the background...');
+    }
+
+    if (status === 'completed' && lastStatusRef[0] !== 'completed') {
       refetchTrash();
       refetchTrashFolders();
     }
+
+    if (status === 'failed' && lastStatusRef[0] !== 'failed') {
+      toast.error('Emptying trash failed. Please try again.');
+      refetchTrash();
+      refetchTrashFolders();
+    }
+
+    lastStatusRef[1](status);
   }, [emptyTrashStatus.data?.status, refetchTrash, refetchTrashFolders]);
 
   // Invalidate pagination when page exceeds available data
@@ -288,7 +306,20 @@ export function TrashPage() {
         onClose={() => setShowEmptyConfirm(false)}
         onConfirm={() => {
           setShowEmptyConfirm(false);
-          emptyTrash.mutate(undefined);
+          emptyTrash.mutate(undefined, {
+            onSuccess: (res) => {
+              // Trigger status polling by refetching
+              emptyTrashStatus.refetch();
+            },
+            onError: (err) => {
+              const msg = getErrorMessage(err);
+              if ((err as any)?.response?.status === 409) {
+                toast.error('An empty trash operation is already in progress.');
+              } else {
+                toast.error(msg);
+              }
+            },
+          });
         }}
         title="Empty trash?"
         description={`This will permanently delete all ${totalItems} item${totalItems !== 1 ? 's' : ''} in your trash. This action cannot be undone.`}
