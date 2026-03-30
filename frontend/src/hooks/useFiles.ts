@@ -207,7 +207,7 @@ export function useStarFile() {
 export function useBulkTrash() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (params: { fileIds: string[]; folderIds: string[]; trashRootFiles?: boolean }) =>
+    mutationFn: (params: { fileIds: string[]; folderIds: string[]; trashRootFiles?: boolean; trashAllInFolder?: string }) =>
       api.post('/files/bulk-trash', params),
     onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ['files'] });

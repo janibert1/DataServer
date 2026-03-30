@@ -185,8 +185,7 @@ export function FolderPage() {
 
   function handleBulkTrash() {
     if (selectAllMode) {
-      // All files in this folder
-      bulkTrash.mutate({ fileIds: [], folderIds: [], trashRootFiles: false }, {
+      bulkTrash.mutate({ fileIds: [], folderIds: [], trashAllInFolder: folderId ?? null }, {
         onSuccess: () => {
           setSelectedItems(new Set());
           setSelectAllMode(false);
@@ -361,6 +360,33 @@ export function FolderPage() {
               : `${loadedItems} of ${totalItems} items`}
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={handleSelectAll}
+              className={clsx(
+                'px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors',
+                selectedItems.size > 0 && !selectAllMode
+                  ? 'bg-brand-100 text-brand-700 border-brand-200'
+                  : 'text-slate-600 bg-white border-slate-200 hover:bg-slate-50'
+              )}
+              title="Select all on this page"
+            >
+              Select all on page
+            </button>
+
+            {fileTotal > 500 && (
+              <button
+                onClick={handleSelectAllTotal}
+                className={clsx(
+                  'px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors',
+                  selectAllMode
+                    ? 'bg-brand-100 text-brand-700 border-brand-200'
+                    : 'text-slate-600 bg-white border-slate-200 hover:bg-slate-50'
+                )}
+              >
+                Select all ({fileTotal})
+              </button>
+            )}
+
             {/* Page navigation */}
             {fileTotal > 500 && (
               <div className="flex items-center gap-1 text-xs text-slate-500">

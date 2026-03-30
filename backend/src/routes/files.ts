@@ -391,18 +391,19 @@ filesRouter.put('/:id/move', async (req: Request, res: Response) => {
 
 filesRouter.post('/bulk-trash', async (req: Request, res: Response) => {
   const user = req.user as any;
-  const { fileIds = [], folderIds = [], trashRootFiles = false } = req.body as {
+  const { fileIds = [], folderIds = [], trashRootFiles = false, trashAllInFolder = null } = req.body as {
     fileIds?: string[];
     folderIds?: string[];
     trashRootFiles?: boolean;
+    trashAllInFolder?: string | null;
   };
 
   if (!Array.isArray(fileIds) || !Array.isArray(folderIds)) {
     res.status(400).json({ error: 'fileIds and folderIds must be arrays.' });
     return;
   }
-  if (fileIds.length === 0 && folderIds.length === 0 && !trashRootFiles) {
-    res.status(400).json({ error: 'Provide at least one fileId, folderId, or trashRootFiles: true.' });
+  if (fileIds.length === 0 && folderIds.length === 0 && !trashRootFiles && !trashAllInFolder) {
+    res.status(400).json({ error: 'Provide at least one fileId, folderId, trashRootFiles: true, or trashAllInFolder.' });
     return;
   }
 
@@ -426,6 +427,22 @@ filesRouter.post('/bulk-trash', async (req: Request, res: Response) => {
     });
     if (folderCount !== folderIds.length) {
       res.status(403).json({ error: 'Some folders not found or not owned by you.' });
+      return;
+    }
+  }
+
+  // Validate trashAllInFolder target
+  if (trashAllInFolder) {
+    const folder = await prisma.folder.findUnique({
+      where: { id: trashAllInFolder },
+      select: { ownerId: true, isTrashed: true },
+    });
+    if (!folder || folder.isTrashed) {
+      res.status(404).json({ error: 'Folder not found.' });
+      return;
+    }
+    if (folder.ownerId !== user.id) {
+      res.status(403).json({ error: 'Only the owner can trash all files in this folder.' });
       return;
     }
   }
@@ -455,11 +472,16 @@ filesRouter.post('/bulk-trash', async (req: Request, res: Response) => {
 
   if (trashRootFiles && fileIds.length === 0) {
     // Trash all root-level files (no folderId) owned by user
-    const rootFileCount = await prisma.file.count({
-      where: { ownerId: user.id, folderId: null, isTrashed: false },
-    });
     ops.push(prisma.file.updateMany({
       where: { ownerId: user.id, folderId: null, isTrashed: false },
+      data: { isTrashed: true, trashedAt: now },
+    }));
+  }
+
+  if (trashAllInFolder) {
+    // Trash all files in the specified folder (not subfolders)
+    ops.push(prisma.file.updateMany({
+      where: { folderId: trashAllInFolder, isTrashed: false },
       data: { isTrashed: true, trashedAt: now },
     }));
   }

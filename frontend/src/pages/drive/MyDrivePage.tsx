@@ -429,7 +429,7 @@ export function MyDrivePage() {
 
         {/* Toolbar */}
         <div className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             <div className="relative">
               <button
                 onClick={() => setSortDropdownOpen((o) => !o)}
@@ -445,7 +445,7 @@ export function MyDrivePage() {
               {sortDropdownOpen && (
                 <>
                   <div className="fixed inset-0 z-10" onClick={() => setSortDropdownOpen(false)} />
-                  <div className="absolute left-0 top-9 z-20 w-52 bg-white rounded-xl shadow-lg border border-slate-100 overflow-hidden">
+                  <div className="absolute left-0 top-9 z-20 w-48 bg-white rounded-xl shadow-lg border border-slate-100 overflow-hidden">
                     <div className="px-4 py-2 border-b border-slate-50">
                       <p className="text-xs text-slate-400 uppercase tracking-wide font-medium">Sort by</p>
                     </div>
@@ -464,24 +464,37 @@ export function MyDrivePage() {
                         )}
                       </button>
                     ))}
-                    <div className="border-t border-slate-50 pt-2 pb-1">
-                      <button
-                        onClick={() => {
-                          handleSelectAll();
-                          setSortDropdownOpen(false);
-                        }}
-                        className={clsx(
-                          'w-full flex items-center justify-between px-4 py-2.5 text-sm text-left transition-colors',
-                          selectAllMode ? 'bg-brand-50 text-brand-700 font-medium' : 'text-slate-700 hover:bg-slate-50'
-                        )}
-                      >
-                        {selectAllMode ? '✓ All selected' : 'Select all'}
-                      </button>
-                    </div>
                   </div>
                 </>
               )}
             </div>
+
+            <button
+              onClick={handleSelectAll}
+              className={clsx(
+                'px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors',
+                selectedItems.size > 0 && !selectAllMode
+                  ? 'bg-brand-100 text-brand-700 border-brand-200'
+                  : 'text-slate-600 bg-white border-slate-200 hover:bg-slate-50'
+              )}
+              title="Select all on this page"
+            >
+              Select all on page
+            </button>
+
+            {fileTotal > 500 && (
+              <button
+                onClick={handleSelectAllTotal}
+                className={clsx(
+                  'px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors',
+                  selectAllMode
+                    ? 'bg-brand-100 text-brand-700 border-brand-200'
+                    : 'text-slate-600 bg-white border-slate-200 hover:bg-slate-50'
+                )}
+              >
+                Select all ({fileTotal})
+              </button>
+            )}
 
             {/* Page navigation */}
             {fileTotal > 500 && (
