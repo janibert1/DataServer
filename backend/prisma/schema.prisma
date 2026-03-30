@@ -235,6 +235,7 @@ model Folder {
   @@index([parentId])
   @@index([path])
   @@index([isTrashed])
+  @@index([ownerId, isTrashed])
   @@index([updatedAt])
 }
 
@@ -275,6 +276,8 @@ model File {
   @@index([folderId])
   @@index([status])
   @@index([isTrashed])
+  @@index([ownerId, isTrashed])
+  @@index([ownerId, folderId, isTrashed])
   @@index([mimeType])
   @@index([name])
   @@index([updatedAt])
