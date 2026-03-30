@@ -461,48 +461,56 @@ filesRouter.post('/bulk-trash', async (req: Request, res: Response) => {
   const descendantIds = folderIds.length > 0 ? await getDescendantFolderIds(folderIds) : [];
   const allFolderIds = [...folderIds, ...descendantIds];
 
-  const ops: any[] = [];
+  // Batch-trash helper — updates 500 rows at a time to avoid long locks
+  async function trashFilesInBatches(where: any, trashedAt: Date) {
+    const BATCH = 500;
+    let total = 0;
+    while (true) {
+      const result = await prisma.file.updateMany({
+        where: { ...where, isTrashed: false },
+        data: { isTrashed: true, trashedAt },
+        take: BATCH,
+      });
+      total += result.count;
+      if (result.count < BATCH) break;
+    }
+    return total;
+  }
 
+  let totalTrashed = 0;
+
+  // Trashing by explicit IDs
   if (fileIds.length > 0) {
-    ops.push(prisma.file.updateMany({
+    await prisma.file.updateMany({
       where: { id: { in: fileIds }, ownerId: user.id },
       data: { isTrashed: true, trashedAt: now },
-    }));
+    });
+    totalTrashed += fileIds.length;
   }
 
+  // Trashing all root files
   if (trashRootFiles && fileIds.length === 0) {
-    // Trash all root-level files (no folderId) owned by user
-    ops.push(prisma.file.updateMany({
-      where: { ownerId: user.id, folderId: null, isTrashed: false },
-      data: { isTrashed: true, trashedAt: now },
-    }));
+    totalTrashed += await trashFilesInBatches({ ownerId: user.id, folderId: null, isTrashed: false }, now);
   }
 
+  // Trashing all files in a folder
   if (trashAllInFolder) {
-    // Trash all files in the specified folder (not subfolders)
-    ops.push(prisma.file.updateMany({
-      where: { folderId: trashAllInFolder, isTrashed: false },
-      data: { isTrashed: true, trashedAt: now },
-    }));
+    totalTrashed += await trashFilesInBatches({ folderId: trashAllInFolder, isTrashed: false }, now);
   }
 
+  // Trashing folders + their nested files
   if (allFolderIds.length > 0) {
-    ops.push(prisma.folder.updateMany({
-      where: { id: { in: allFolderIds } },
-      data: { isTrashed: true, trashedAt: now },
-    }));
-    // Also trash files inside the trashed folders
-    ops.push(prisma.file.updateMany({
-      where: { folderId: { in: allFolderIds }, isTrashed: false },
-      data: { isTrashed: true, trashedAt: now },
-    }));
+    await prisma.$transaction([
+      prisma.folder.updateMany({
+        where: { id: { in: allFolderIds } },
+        data: { isTrashed: true, trashedAt: now },
+      }),
+    ]);
+    totalTrashed += await trashFilesInBatches({ folderId: { in: allFolderIds }, isTrashed: false }, now);
   }
 
-  await prisma.$transaction(ops);
-
-  const totalTrashed = fileIds.length + allFolderIds.length;
   await auditFromRequest(req, AuditAction.FILE_DELETED, {
-    details: { bulkTrash: true, fileCount: fileIds.length, folderCount: folderIds.length, trashRootFiles },
+    details: { bulkTrash: true, fileCount: totalTrashed, folderCount: allFolderIds.length, trashRootFiles },
   });
   res.json({ message: `${totalTrashed} items moved to trash.` });
 });
