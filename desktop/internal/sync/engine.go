@@ -201,12 +201,19 @@ func (e *Engine) deltaSync(since string) error {
 			continue // No actual change
 		}
 
-		// Need folder path for this file
+		// Determine relative path from folder or server path
 		relPath := rf.Name
 		if rf.FolderID != nil {
 			folder, _ := e.state.GetFolder(*rf.FolderID)
 			if folder != nil {
 				relPath = filepath.Join(folder.Path, rf.Name)
+			} else if rf.Path != "" {
+				// Folder not in local state — derive path from server's path field
+				// Server path is like "/parent/child/filename", strip leading / and use as-is
+				serverPath := strings.TrimPrefix(rf.Path, "/")
+				if serverPath != "" {
+					relPath = filepath.FromSlash(serverPath)
+				}
 			}
 		}
 

@@ -99,7 +99,7 @@ export function useUploadFiles() {
           },
         });
 
-        const { uploaded, errors } = res.data;
+        const { files: uploaded, errors } = res.data;
 
         uploadIds.forEach((id, i) => {
           if (errors[i]) {

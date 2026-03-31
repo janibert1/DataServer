@@ -18,9 +18,9 @@ export function useUploadFiles(folderId?: string) {
           uploadIds.forEach((id) => updateUpload(id, { progress }));
         });
 
-        // Backend returns { uploaded: [...], errors: [...] }
+        // Backend returns { files: [...], errors: [...] }
         uploadIds.forEach((id, i) => {
-          const uploaded = result.uploaded?.[i];
+          const uploaded = result.files?.[i];
           if (uploaded) {
             updateUpload(id, { status: 'complete', progress: 1 });
           } else {

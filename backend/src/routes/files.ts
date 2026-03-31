@@ -307,6 +307,8 @@ filesRouter.post(
           name: safeName,
           size: file.size,
           mimeType: file.mimetype,
+          checksum,
+          folderId: folderId ?? null,
           status: FileStatus.ACTIVE,
         });
       } catch (error) {
@@ -315,7 +317,7 @@ filesRouter.post(
       }
     }
 
-    res.json({ uploaded: results, errors });
+    res.json({ files: results, errors });
   }
 );
 

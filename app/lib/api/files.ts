@@ -67,7 +67,7 @@ export function getFileVersions(id: string) {
 }
 
 interface UploadResponse {
-  uploaded: Array<{ id: string; name: string; size: number; mimeType: string; status: string }>;
+  files: Array<{ id: string; name: string; size: number; mimeType: string; checksum: string; folderId: string | null; status: string }>;
   errors: Array<{ filename: string; error: string }>;
 }
 
