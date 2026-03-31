@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -24,6 +25,8 @@ type Engine struct {
 	state   *StateDB
 	syncDir string
 	paused  atomic.Bool
+	ctx     context.Context
+	cancel  context.CancelFunc
 }
 
 type SyncStatus struct {
@@ -43,11 +46,19 @@ func init() {
 
 func NewEngine(client *api.Client, state *StateDB) *Engine {
 	cfg := config.Get()
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Engine{
 		client:  client,
 		state:   state,
 		syncDir: cfg.SyncDir,
+		ctx:     ctx,
+		cancel:  cancel,
 	}
+}
+
+// Stop cancels any in-progress sync operations.
+func (e *Engine) Stop() {
+	e.cancel()
 }
 
 func (e *Engine) SetPaused(p bool) {
@@ -58,8 +69,19 @@ func (e *Engine) IsPaused() bool {
 	return e.paused.Load()
 }
 
+var errCancelled = fmt.Errorf("sync cancelled")
+
+func (e *Engine) cancelled() bool {
+	select {
+	case <-e.ctx.Done():
+		return true
+	default:
+		return false
+	}
+}
+
 func (e *Engine) RunOnce() error {
-	if e.paused.Load() {
+	if e.paused.Load() || e.cancelled() {
 		return nil
 	}
 
@@ -75,6 +97,10 @@ func (e *Engine) RunOnce() error {
 	}
 
 	if err != nil {
+		if err == errCancelled {
+			setStatus("idle", "Sync stopped")
+			return nil
+		}
 		setStatus("error", err.Error())
 		return err
 	}
@@ -122,6 +148,10 @@ func (e *Engine) fullSync() error {
 	// Download files
 	downloaded := 0
 	for _, rf := range resp.Files {
+		if e.cancelled() {
+			return errCancelled
+		}
+
 		relPath := e.fileRelPath(rf, folderPaths)
 		absPath := filepath.Join(e.syncDir, relPath)
 
@@ -196,6 +226,10 @@ func (e *Engine) deltaSync(since string) error {
 	// 3. Handle remote file changes (downloads)
 	downloaded := 0
 	for _, rf := range resp.Files {
+		if e.cancelled() {
+			return errCancelled
+		}
+
 		existing, _ := e.state.GetFile(rf.ID)
 		if existing != nil && existing.Checksum == rf.Checksum {
 			continue // No actual change
@@ -273,7 +307,13 @@ func (e *Engine) deltaSync(since string) error {
 	}
 
 	// 5. Scan local filesystem for local-only changes
+	if e.cancelled() {
+		return errCancelled
+	}
 	if err := e.scanLocalChanges(); err != nil {
+		if err == errCancelled {
+			return errCancelled
+		}
 		log.Error().Err(err).Msg("Local scan failed")
 	}
 
@@ -301,6 +341,10 @@ func (e *Engine) scanLocalChanges() error {
 	uploaded := 0
 
 	err := filepath.Walk(e.syncDir, func(path string, info os.FileInfo, err error) error {
+		if e.cancelled() {
+			return errCancelled
+		}
+
 		if err != nil {
 			return nil // skip errors
 		}

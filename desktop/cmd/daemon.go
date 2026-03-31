@@ -124,12 +124,14 @@ var daemonCmd = &cobra.Command{
 			// Headless mode
 			log.Info().Msg("Running in headless mode (no tray). Press Ctrl+C to stop.")
 			<-sigCh
+			engine.Stop()
 			close(stopCh)
 			log.Info().Msg("Shutting down...")
 		} else {
 			// System tray mode — runs on main thread (required by macOS)
 			go func() {
 				<-sigCh
+				engine.Stop()
 				close(stopCh)
 				// systray.Quit() must be called to unblock Run()
 				// but we can't import it here without circular dep
@@ -154,9 +156,11 @@ var daemonCmd = &cobra.Command{
 				OnLogout: func() {
 					auth.DeleteToken()
 					log.Info().Msg("Logged out")
+					engine.Stop()
 					close(stopCh)
 				},
 				OnQuit: func() {
+					engine.Stop()
 					close(stopCh)
 					log.Info().Msg("Quitting")
 				},
