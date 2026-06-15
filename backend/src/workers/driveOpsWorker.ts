@@ -32,7 +32,21 @@ export interface DriveOpsExtractJobData {
   label: string;
 }
 
-export type DriveOpsJobData = DriveOpsZipJobData | DriveOpsExtractJobData;
+export interface DriveOpsTrashJobData {
+  type: 'trash-folder';
+  userId: string;
+  folderId: string;
+  label: string;
+}
+
+export interface DriveOpsRestoreJobData {
+  type: 'restore-folder';
+  userId: string;
+  folderId: string;
+  label: string;
+}
+
+export type DriveOpsJobData = DriveOpsZipJobData | DriveOpsExtractJobData | DriveOpsTrashJobData | DriveOpsRestoreJobData;
 
 async function processZipToDrive(job: Job<DriveOpsZipJobData>): Promise<object> {
   const { userId, fileIds, folderIds, name, folderId: targetFolderId } = job.data;
@@ -276,8 +290,107 @@ async function processExtract(job: Job<DriveOpsExtractJobData>): Promise<object>
   return { filesCreated, foldersCreated, message: msg };
 }
 
+
+async function processTrashFolder(job: Job<DriveOpsTrashJobData>): Promise<object> {
+  const { userId, folderId } = job.data;
+
+  await job.updateProgress({ percent: 5, message: 'Collecting folders\u2026' });
+
+  // Single recursive CTE — one DB round-trip instead of N sequential queries
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    WITH RECURSIVE descendants AS (
+      SELECT id FROM "Folder"
+      WHERE id = ${folderId} AND "ownerId" = ${userId} AND "isTrashed" = false AND "deletedAt" IS NULL
+      UNION ALL
+      SELECT f.id FROM "Folder" f
+      INNER JOIN descendants d ON f."parentId" = d.id
+      WHERE f."isTrashed" = false AND f."deletedAt" IS NULL
+    )
+    SELECT id FROM descendants
+  `;
+
+  const allFolderIds = rows.map((r) => r.id);
+  if (allFolderIds.length === 0) throw new Error('Folder not found or already trashed');
+
+  await job.updateProgress({ percent: 20, message: `Moving ${allFolderIds.length} folder${allFolderIds.length !== 1 ? 's' : ''} to trash\u2026` });
+
+  const now = new Date();
+  const BATCH = 500;
+
+  for (let i = 0; i < allFolderIds.length; i += BATCH) {
+    const batch = allFolderIds.slice(i, i + BATCH);
+    await prisma.$transaction([
+      prisma.folder.updateMany({
+        where: { id: { in: batch }, ownerId: userId },
+        data: { isTrashed: true, trashedAt: now },
+      }),
+      prisma.file.updateMany({
+        where: { folderId: { in: batch }, ownerId: userId, isTrashed: false },
+        data: { isTrashed: true, trashedAt: now },
+      }),
+    ]);
+    const pct = Math.min(20 + Math.round(((i + batch.length) / allFolderIds.length) * 75), 95);
+    await job.updateProgress({
+      percent: pct,
+      message: `Moving items to trash\u2026 (${Math.min(i + batch.length, allFolderIds.length)}/${allFolderIds.length} folders)`,
+    });
+  }
+
+  await job.updateProgress({ percent: 100, message: 'Moved to trash' });
+  return { folderCount: allFolderIds.length };
+}
+
+async function processRestoreFolder(job: Job<DriveOpsRestoreJobData>): Promise<object> {
+  const { userId, folderId } = job.data;
+
+  await job.updateProgress({ percent: 5, message: 'Collecting folders\u2026' });
+
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    WITH RECURSIVE descendants AS (
+      SELECT id FROM "Folder"
+      WHERE id = ${folderId} AND "ownerId" = ${userId} AND "isTrashed" = true
+      UNION ALL
+      SELECT f.id FROM "Folder" f
+      INNER JOIN descendants d ON f."parentId" = d.id
+      WHERE f."isTrashed" = true
+    )
+    SELECT id FROM descendants
+  `;
+
+  const allFolderIds = rows.map((r) => r.id);
+  if (allFolderIds.length === 0) throw new Error('Folder not found in trash');
+
+  await job.updateProgress({ percent: 20, message: `Restoring ${allFolderIds.length} folder${allFolderIds.length !== 1 ? 's' : ''}\u2026` });
+
+  const BATCH = 500;
+
+  for (let i = 0; i < allFolderIds.length; i += BATCH) {
+    const batch = allFolderIds.slice(i, i + BATCH);
+    await prisma.$transaction([
+      prisma.folder.updateMany({
+        where: { id: { in: batch }, ownerId: userId },
+        data: { isTrashed: false, trashedAt: null },
+      }),
+      prisma.file.updateMany({
+        where: { folderId: { in: batch }, ownerId: userId, isTrashed: true },
+        data: { isTrashed: false, trashedAt: null },
+      }),
+    ]);
+    const pct = Math.min(20 + Math.round(((i + batch.length) / allFolderIds.length) * 75), 95);
+    await job.updateProgress({
+      percent: pct,
+      message: `Restoring\u2026 (${Math.min(i + batch.length, allFolderIds.length)}/${allFolderIds.length} folders)`,
+    });
+  }
+
+  await job.updateProgress({ percent: 100, message: 'Restored' });
+  return { folderCount: allFolderIds.length };
+}
+
 async function processDriveOp(job: Job<DriveOpsJobData>): Promise<object> {
   if (job.data.type === 'zip-to-drive') return processZipToDrive(job as Job<DriveOpsZipJobData>);
+  if (job.data.type === 'trash-folder') return processTrashFolder(job as Job<DriveOpsTrashJobData>);
+  if (job.data.type === 'restore-folder') return processRestoreFolder(job as Job<DriveOpsRestoreJobData>);
   return processExtract(job as Job<DriveOpsExtractJobData>);
 }
 

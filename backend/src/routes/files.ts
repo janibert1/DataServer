@@ -140,7 +140,7 @@ filesRouter.get('/trash', async (req: Request, res: Response) => {
 
   const [files, total] = await Promise.all([
     prisma.file.findMany({
-      where: { ownerId: user.id, isTrashed: true, status: { not: FileStatus.DELETED } },
+      where: { ownerId: user.id, isTrashed: true, status: { not: FileStatus.DELETED }, OR: [{ folderId: null }, { folder: { isTrashed: false } }] },
       orderBy: { trashedAt: 'desc' },
       select: {
         id: true, name: true, mimeType: true, size: true, trashedAt: true, path: true,
@@ -149,7 +149,7 @@ filesRouter.get('/trash', async (req: Request, res: Response) => {
       skip,
     }),
     prisma.file.count({
-      where: { ownerId: user.id, isTrashed: true, status: { not: FileStatus.DELETED } },
+      where: { ownerId: user.id, isTrashed: true, status: { not: FileStatus.DELETED }, OR: [{ folderId: null }, { folder: { isTrashed: false } }] },
     }),
   ]);
 

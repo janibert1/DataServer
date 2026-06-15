@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { api, getErrorMessage } from '../lib/axios';
 import { DriveFolder, SharePermission } from '../types';
+import { useDriveOpsStore } from '../store/driveOpsStore';
 
 export function useFolders(parentId?: string | null) {
   return useQuery({
@@ -93,12 +94,19 @@ export function useMoveFolder() {
 
 export function useTrashFolder() {
   const queryClient = useQueryClient();
+  const addJob = useDriveOpsStore((s) => s.addJob);
   return useMutation({
-    mutationFn: (id: string) => api.post(`/folders/${id}/trash`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['folders'] });
-      queryClient.invalidateQueries({ queryKey: ['folder-contents'] });
-      toast.success('Folder moved to trash.');
+    mutationFn: (id: string) => api.post<{ jobId: string; label: string }>(`/folders/${id}/trash`),
+    onSuccess: (res, id) => {
+      const { jobId, label } = res.data;
+      addJob({ id: jobId, type: 'trash-folder', label });
+      // Optimistically remove from visible listings while the job runs in background
+      queryClient.setQueriesData<any>({ queryKey: ['folders'] }, (old: any) =>
+        old ? { ...old, folders: (old.folders ?? []).filter((f: any) => f.id !== id) } : old
+      );
+      queryClient.setQueriesData<any>({ queryKey: ['folder-contents'] }, (old: any) =>
+        old ? { ...old, folders: (old.folders ?? []).filter((f: any) => f.id !== id) } : old
+      );
     },
     onError: (err) => toast.error(getErrorMessage(err)),
   });
@@ -106,12 +114,13 @@ export function useTrashFolder() {
 
 export function useRestoreFolder() {
   const queryClient = useQueryClient();
+  const addJob = useDriveOpsStore((s) => s.addJob);
   return useMutation({
-    mutationFn: (id: string) => api.post(`/folders/${id}/restore`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['folders'] });
-      queryClient.invalidateQueries({ queryKey: ['files'] });
-      toast.success('Folder restored.');
+    mutationFn: (id: string) => api.post<{ jobId: string; label: string }>(`/folders/${id}/restore`),
+    onSuccess: (res) => {
+      const { jobId, label } = res.data;
+      addJob({ id: jobId, type: 'restore-folder', label });
+      queryClient.invalidateQueries({ queryKey: ['folders', 'trashed'] });
     },
     onError: (err) => toast.error(getErrorMessage(err)),
   });

@@ -3,7 +3,7 @@ import { persist } from 'zustand/middleware';
 
 export interface DriveOpsJob {
   id: string;
-  type: 'zip-to-drive' | 'extract';
+  type: 'zip-to-drive' | 'extract' | 'trash-folder' | 'restore-folder';
   label: string;
   status: 'waiting' | 'active' | 'completed' | 'failed' | 'delayed' | 'unknown';
   progress: { percent: number; message: string } | null;

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { Archive, FolderOutput, CheckCircle, XCircle, Loader2, X, ChevronDown, ChevronUp } from 'lucide-react';
+import { Archive, FolderOutput, CheckCircle, XCircle, Loader2, X, ChevronDown, ChevronUp, Trash2, RotateCcw } from 'lucide-react';
 import { useDriveOpsStore } from '../../store/driveOpsStore';
 import { api } from '../../lib/axios';
 import toast from 'react-hot-toast';
@@ -90,6 +90,10 @@ export function DriveOpsPanel() {
                 <div className="flex items-center gap-1.5 mb-0.5">
                   {job.type === 'zip-to-drive'
                     ? <Archive className="w-3 h-3 text-slate-400 flex-shrink-0" />
+                    : job.type === 'trash-folder'
+                    ? <Trash2 className="w-3 h-3 text-slate-400 flex-shrink-0" />
+                    : job.type === 'restore-folder'
+                    ? <RotateCcw className="w-3 h-3 text-slate-400 flex-shrink-0" />
                     : <FolderOutput className="w-3 h-3 text-slate-400 flex-shrink-0" />}
                   <p className="text-xs font-medium text-slate-700 truncate">{job.label}</p>
                 </div>

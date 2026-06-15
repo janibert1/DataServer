@@ -7,7 +7,7 @@ import { getEffectivePermission, shareFolder, updateSharePermission, revokeShare
 import { notifyFolderShared } from '../services/notificationService';
 import { sanitizeFileName } from '../middleware/upload';
 import { Prisma, AuditAction, SharePermission } from '@prisma/client';
-import { aiSortQueue, emptyTrashQueue } from '../workers/queues';
+import { aiSortQueue, emptyTrashQueue, driveOpsQueue } from '../workers/queues';
 
 async function isAiSortActive(userId: string): Promise<boolean> {
   const jobs = await aiSortQueue.getJobs(['active', 'waiting', 'delayed']);
@@ -138,7 +138,7 @@ foldersRouter.get('/trashed', async (req: Request, res: Response) => {
 
   const [folders, total] = await Promise.all([
     prisma.folder.findMany({
-      where: { ownerId: user.id, isTrashed: true, deletedAt: null },
+      where: { ownerId: user.id, isTrashed: true, deletedAt: null, OR: [{ parentId: null }, { parent: { isTrashed: false } }] },
       orderBy: { trashedAt: 'desc' },
       select: {
         id: true, name: true, color: true, trashedAt: true, parentId: true,
@@ -148,7 +148,7 @@ foldersRouter.get('/trashed', async (req: Request, res: Response) => {
       skip,
     }),
     prisma.folder.count({
-      where: { ownerId: user.id, isTrashed: true, deletedAt: null },
+      where: { ownerId: user.id, isTrashed: true, deletedAt: null, OR: [{ parentId: null }, { parent: { isTrashed: false } }] },
     }),
   ]);
 
@@ -496,7 +496,7 @@ foldersRouter.post('/:id/trash', async (req: Request, res: Response) => {
   }
   const { id } = req.params;
 
-  const folder = await prisma.folder.findUnique({ where: { id }, select: { ownerId: true, isTrashed: true } });
+  const folder = await prisma.folder.findUnique({ where: { id }, select: { ownerId: true, isTrashed: true, name: true } });
   if (!folder || folder.isTrashed) {
     res.status(404).json({ error: 'Folder not found.' });
     return;
@@ -506,46 +506,17 @@ foldersRouter.post('/:id/trash', async (req: Request, res: Response) => {
     return;
   }
 
-  const now = new Date();
-
-  // Recursively collect all descendant folder IDs
-  async function getDescendantFolderIds(parentId: string): Promise<string[]> {
-    const children = await prisma.folder.findMany({
-      where: { parentId, isTrashed: false },
-      select: { id: true },
-    });
-    const ids: string[] = [];
-    for (const child of children) {
-      ids.push(child.id);
-      ids.push(...await getDescendantFolderIds(child.id));
-    }
-    return ids;
-  }
-
-  const descendantIds = await getDescendantFolderIds(id);
-  const allFolderIds = [id, ...descendantIds];
-
-  // Trash the folder, all subfolders, and all files inside them
-  await prisma.$transaction([
-    prisma.folder.updateMany({
-      where: { id: { in: allFolderIds } },
-      data: { isTrashed: true, trashedAt: now },
-    }),
-    prisma.file.updateMany({
-      where: { folderId: { in: allFolderIds }, isTrashed: false },
-      data: { isTrashed: true, trashedAt: now },
-    }),
-  ]);
-
+  const label = `Moving "${folder.name}" to trash`;
+  const job = await driveOpsQueue.add('drive-op', { type: 'trash-folder', userId: user.id, folderId: id, label });
   await auditFromRequest(req, AuditAction.FOLDER_DELETED, { entityType: 'Folder', entityId: id });
-  res.json({ message: 'Folder moved to trash.' });
+  res.status(202).json({ jobId: job.id, label });
 });
 
 foldersRouter.post('/:id/restore', async (req: Request, res: Response) => {
   const user = req.user as any;
   const { id } = req.params;
 
-  const folder = await prisma.folder.findUnique({ where: { id }, select: { ownerId: true, isTrashed: true } });
+  const folder = await prisma.folder.findUnique({ where: { id }, select: { ownerId: true, isTrashed: true, name: true } });
   if (!folder || !folder.isTrashed) {
     res.status(404).json({ error: 'Folder not found in trash.' });
     return;
@@ -555,36 +526,9 @@ foldersRouter.post('/:id/restore', async (req: Request, res: Response) => {
     return;
   }
 
-  // Recursively collect all descendant folder IDs
-  async function getDescendantFolderIds(parentId: string): Promise<string[]> {
-    const children = await prisma.folder.findMany({
-      where: { parentId, isTrashed: true },
-      select: { id: true },
-    });
-    const ids: string[] = [];
-    for (const child of children) {
-      ids.push(child.id);
-      ids.push(...await getDescendantFolderIds(child.id));
-    }
-    return ids;
-  }
-
-  const descendantIds = await getDescendantFolderIds(id);
-  const allFolderIds = [id, ...descendantIds];
-
-  // Restore the folder, all subfolders, and all files inside them
-  await prisma.$transaction([
-    prisma.folder.updateMany({
-      where: { id: { in: allFolderIds } },
-      data: { isTrashed: false, trashedAt: null },
-    }),
-    prisma.file.updateMany({
-      where: { folderId: { in: allFolderIds }, isTrashed: true },
-      data: { isTrashed: false, trashedAt: null },
-    }),
-  ]);
-
-  res.json({ message: 'Folder restored.' });
+  const label = `Restoring "${folder.name}"`;
+  const job = await driveOpsQueue.add('drive-op', { type: 'restore-folder', userId: user.id, folderId: id, label });
+  res.status(202).json({ jobId: job.id, label });
 });
 
 // ─── Star folder ─────────────────────────────────────────────
