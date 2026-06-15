@@ -74,6 +74,16 @@ export const config = {
     port: optionalInt('CLAMAV_PORT', 3310),
   },
 
+  gemini: {
+    apiKey: optional('GOOGLE_API_KEY', ''),
+  },
+
+  vapid: {
+    publicKey: optional('VAPID_PUBLIC_KEY', ''),
+    privateKey: optional('VAPID_PRIVATE_KEY', ''),
+    email: optional('VAPID_EMAIL', 'mailto:admin@dataserver.app'),
+  },
+
   storage: {
     defaultQuotaBytes: BigInt(optional('DEFAULT_QUOTA_BYTES', '10737418240')),
     maxFileSizeBytes: BigInt(optional('MAX_FILE_SIZE_BYTES', '2147483648')),
@@ -85,12 +95,12 @@ export const config = {
       windowMs: optionalInt('RATE_LIMIT_AUTH_WINDOW_MS', 900000),
     },
     api: {
-      max: optionalInt('RATE_LIMIT_API_MAX', 200),
+      max: optionalInt('RATE_LIMIT_API_MAX', 2000),
       windowMs: optionalInt('RATE_LIMIT_API_WINDOW_MS', 60000),
     },
     upload: {
-      max: optionalInt('RATE_LIMIT_UPLOAD_MAX', 20),
-      windowMs: optionalInt('RATE_LIMIT_UPLOAD_WINDOW_MS', 3600000),
+      max: optionalInt('RATE_LIMIT_UPLOAD_MAX', 1000),
+      windowMs: optionalInt('RATE_LIMIT_UPLOAD_WINDOW_MS', 60000),
     },
   },
 } as const;

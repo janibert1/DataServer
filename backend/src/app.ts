@@ -83,7 +83,7 @@ export function createApp() {
       cookie: {
         httpOnly: true,
         secure: config.cookieSecure,
-        sameSite: config.cookieSecure ? 'strict' : 'lax',
+        sameSite: 'lax',
         maxAge: config.session.maxAgeMs,
       },
     })

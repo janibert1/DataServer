@@ -9,6 +9,9 @@ import { adminRouter } from './admin';
 import { accountRouter } from './account';
 import { tokensRouter } from './tokens';
 import { syncRouter } from './sync';
+import { pushRouter } from './push';
+import { downloadsRouter } from './downloads';
+import { jobsRouter } from './jobs';
 
 export const router = Router();
 
@@ -22,3 +25,6 @@ router.use('/admin', adminRouter);
 router.use('/account', accountRouter);
 router.use('/tokens', tokensRouter);
 router.use('/sync', syncRouter);
+router.use('/push', pushRouter);
+router.use('/downloads', downloadsRouter);
+router.use('/jobs', jobsRouter);

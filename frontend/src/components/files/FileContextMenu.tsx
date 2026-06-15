@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import {
   Download, Edit2, Move, Star, StarOff, Share2, Trash2,
-  RotateCcw, Eye, Copy, FolderOpen, X
+  RotateCcw, Eye, Copy, FolderOpen, X, Archive, FolderOutput
 } from 'lucide-react';
 import { DriveFile, DriveFolder } from '../../types';
 
@@ -46,6 +46,8 @@ export function FileContextMenu({ position, onClose, onAction, type, item, isTra
     top: Math.min(position.y, window.innerHeight - 300),
   };
 
+  const isZip = type === 'file' && (item as DriveFile).name?.toLowerCase().endsWith('.zip');
+
   const fileMenuItems: MenuItem[] = isTrash
     ? [
         { label: 'Restore', icon: RotateCcw, action: 'restore' },
@@ -53,7 +55,9 @@ export function FileContextMenu({ position, onClose, onAction, type, item, isTra
       ]
     : [
         { label: 'Preview', icon: Eye, action: 'preview' },
-        { label: 'Download', icon: Download, action: 'download', divider: true },
+        { label: 'Download', icon: Download, action: 'download' },
+        ...(isZip ? [{ label: 'Extract here', icon: FolderOutput, action: 'extract', divider: true }] : [{ divider: true } as any]),
+        { label: 'Compress to zip', icon: Archive, action: 'compress', divider: !isZip },
         { label: 'Rename', icon: Edit2, action: 'rename' },
         { label: 'Move to…', icon: Move, action: 'move', divider: true },
         { label: (item as DriveFile).isStarred ? 'Remove star' : 'Add to starred', icon: (item as DriveFile).isStarred ? StarOff : Star, action: 'star', divider: true },
@@ -67,6 +71,7 @@ export function FileContextMenu({ position, onClose, onAction, type, item, isTra
       ]
     : [
         { label: 'Open', icon: FolderOpen, action: 'open', divider: true },
+        { label: 'Compress to zip', icon: Archive, action: 'compress', divider: true },
         { label: 'Rename', icon: Edit2, action: 'rename' },
         { label: 'Move to…', icon: Move, action: 'move', divider: true },
         { label: (item as DriveFolder).isStarred ? 'Remove star' : 'Add to starred', icon: (item as DriveFolder).isStarred ? StarOff : Star, action: 'star' },
@@ -83,20 +88,22 @@ export function FileContextMenu({ position, onClose, onAction, type, item, isTra
       style={menuStyle}
     >
       {menuItems.map((menuItem, i) => (
-        <div key={menuItem.action}>
+        <div key={menuItem.action ?? `divider-${i}`}>
           {menuItem.divider && <div className="my-1 border-t border-slate-100" />}
-          <button
-            className={`w-full flex items-center gap-3 px-3 py-2 text-sm hover:bg-slate-50 transition-colors text-left ${
-              menuItem.danger ? 'text-red-600 hover:bg-red-50' : 'text-slate-700'
-            }`}
-            onClick={() => {
-              onAction(menuItem.action);
-              onClose();
-            }}
-          >
-            <menuItem.icon className="w-4 h-4 flex-shrink-0" />
-            {menuItem.label}
-          </button>
+          {menuItem.label && menuItem.icon && (
+            <button
+              className={`w-full flex items-center gap-3 px-3 py-2 text-sm hover:bg-slate-50 transition-colors text-left ${
+                menuItem.danger ? 'text-red-600 hover:bg-red-50' : 'text-slate-700'
+              }`}
+              onClick={() => {
+                onAction(menuItem.action);
+                onClose();
+              }}
+            >
+              <menuItem.icon className="w-4 h-4 flex-shrink-0" />
+              {menuItem.label}
+            </button>
+          )}
         </div>
       ))}
     </div>

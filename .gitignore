@@ -49,3 +49,9 @@ tailscale/state/
 # Uploaded files (if any local dev uploads land here)
 uploads/
 tmp/
+
+# Cloudflare tunnel credentials (contain account secrets)
+cloudflared/creds.json
+
+# Backup files created during development
+*.bak

@@ -1,7 +1,7 @@
 import { logger } from '../lib/logger';
 
 // Queue instances (imported so they are initialised before workers start)
-export { previewQueue, virusScanQueue, trashCleanupQueue, notificationQueue } from './queues';
+export { previewQueue, virusScanQueue, trashCleanupQueue, notificationQueue, zipQueue } from './queues';
 
 // Worker instances
 import { previewWorker } from './previewWorker';
@@ -9,9 +9,12 @@ import { virusScanWorker } from './virusScanWorker';
 import { trashCleanupWorker } from './trashCleanupWorker';
 import { notificationWorker } from './notificationWorker';
 import { emptyTrashWorker } from './emptyTrashWorker';
+import { aiSortWorker } from './aiSortWorker';
+import { zipWorker } from './zipWorker';
+import { driveOpsWorker } from './driveOpsWorker';
 
 // Re-export workers for callers that need direct access
-export { previewWorker, virusScanWorker, trashCleanupWorker, notificationWorker, emptyTrashWorker };
+export { previewWorker, virusScanWorker, trashCleanupWorker, notificationWorker, emptyTrashWorker, aiSortWorker, zipWorker, driveOpsWorker };
 
 // Scheduled / recurring job registration
 export { scheduleRecurringJobs } from './scheduledJobs';
@@ -22,8 +25,11 @@ export type { VirusScanJobData } from './virusScanWorker';
 export type { TrashCleanupJobData } from './trashCleanupWorker';
 export type { NotificationJobData } from './notificationWorker';
 export type { EmptyTrashJobData } from './emptyTrashWorker';
+export type { AiSortJobData } from './aiSortWorker';
+export type { ZipJobData } from './zipWorker';
+export type { DriveOpsJobData } from './driveOpsWorker';
 
-const ALL_WORKERS = [previewWorker, virusScanWorker, trashCleanupWorker, notificationWorker, emptyTrashWorker];
+const ALL_WORKERS = [previewWorker, virusScanWorker, trashCleanupWorker, notificationWorker, emptyTrashWorker, aiSortWorker, zipWorker, driveOpsWorker];
 
 /**
  * Starts all BullMQ workers and registers recurring scheduled jobs.

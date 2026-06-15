@@ -2,14 +2,16 @@ import { useState, useEffect, Fragment, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   FolderPlus, LayoutGrid, List, ChevronDown,
-  Clock, Star, Trash2, ChevronLeft, ChevronRight
+  Clock, Star, Trash2, Download, ChevronLeft, ChevronRight, Sparkles
 } from 'lucide-react';
 import clsx from 'clsx';
 import { DriveFile, DriveFolder, SortField, SortDir, ViewMode } from '../../types';
+import { api } from '../../lib/axios';
 import { useFolders, useCreateFolder, useMoveFolder, useStarFolder, useTrashFolder, useRenameFolder } from '../../hooks/useFolders';
 import {
   useFiles, useRecentFiles, useTrashFile, useStarFile,
-  useRenameFile, useDeleteFilePermanently, useMoveFile, useBulkTrash, getFileDownloadUrl
+  useRenameFile, useDeleteFilePermanently, useMoveFile, useBulkTrash, useCompressFiles, useExtractFile, getFileDownloadUrl,
+  useAiSort, useAiSortStatus
 } from '../../hooks/useFiles';
 import { FileGrid, DragDropPayload, SelectionItem } from '../../components/files/FileGrid';
 import { FileList } from '../../components/files/FileList';
@@ -22,6 +24,7 @@ import { EmptyState } from '../../components/common/EmptyState';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { MoveModal } from '../../components/files/MoveModal';
 import { AutoCreateFolderModal } from '../../components/files/AutoCreateFolderModal';
+import { AiSortModal } from '../../components/files/AiSortModal';
 import { FileIcon } from '../../components/files/FileIcon';
 import { formatDistanceToNow } from 'date-fns';
 import toast from 'react-hot-toast';
@@ -166,6 +169,7 @@ export function MyDrivePage() {
   const [confirmBulkTrash, setConfirmBulkTrash] = useState(false);
   const [filePage, setFilePage] = useState(1);
   const [selectAllMode, setSelectAllMode] = useState(false);
+  const [showAiSort, setShowAiSort] = useState(false);
 
   const { data: foldersData, isLoading: foldersLoading } = useFolders(null);
   const { data: filesData, isLoading: filesLoading } = useFiles({ folderId: null, sortBy, sortDir, page: filePage });
@@ -202,6 +206,10 @@ export function MyDrivePage() {
   const moveFolder = useMoveFolder();
   const createFolder = useCreateFolder();
   const bulkTrash = useBulkTrash();
+  const compressFiles = useCompressFiles();
+  const extractFile = useExtractFile();
+  const aiSort = useAiSort();
+  const { data: aiSortStatus } = useAiSortStatus();
 
   function handleToggleSelect(item: SelectionItem) {
     setSelectedItems((prev) => {
@@ -280,6 +288,44 @@ export function MyDrivePage() {
     setSortDropdownOpen(false);
   }
 
+    const [isZipping, setIsZipping] = useState(false);
+
+  async function handleDownloadZip() {
+    const fileIds: string[] = [];
+    const folderIds: string[] = [];
+    selectedItems.forEach((key) => {
+      if (key.startsWith('file:')) fileIds.push(key.slice(5));
+      else if (key.startsWith('folder:')) folderIds.push(key.slice(7));
+    });
+    if (fileIds.length === 0 && folderIds.length === 0) return;
+    setIsZipping(true);
+    try {
+      // Try as blob first (sync zip), fall back to JSON (async)
+      const resp = await api.post('/files/download-zip', { fileIds, folderIds }, { responseType: 'blob' });
+      const text = await resp.data.text();
+      let json: any;
+      try { json = JSON.parse(text); } catch { json = null; }
+      if (json?.async) {
+        toast.success('Your archive is being prepared. Check the Downloads tab.');
+        navigate('/drive/downloads');
+      } else {
+        const blob = new Blob([resp.data], { type: 'application/zip' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const cd = resp.headers['content-disposition'] ?? '';
+        const m = cd.match(/filename="([^"]+)"/);
+        a.download = m?.[1] ?? 'download.zip';
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+    } catch {
+      toast.error('Download failed');
+    } finally {
+      setIsZipping(false);
+    }
+  }
+
   function handleFileAction(action: string, file: DriveFile) {
     if (action === 'preview') setPreviewFile(file);
     else if (action === 'download') {
@@ -294,6 +340,8 @@ export function MyDrivePage() {
     else if (action === 'trash') setConfirmTrash({ type: 'file', id: file.id, name: file.name });
     else if (action === 'delete') setConfirmDeleteFile(file);
     else if (action === 'move') setMoveTarget({ type: 'file', id: file.id, name: file.name });
+    else if (action === 'compress') compressFiles.mutate({ fileIds: [file.id], folderIds: [], folderId: file.folderId ?? null });
+    else if (action === 'extract') extractFile.mutate(file.id);
   }
 
   function handleFolderAction(action: string, folder: DriveFolder) {
@@ -303,6 +351,7 @@ export function MyDrivePage() {
     else if (action === 'trash') setConfirmTrash({ type: 'folder', id: folder.id, name: folder.name });
     else if (action === 'share') setShareFolder(folder);
     else if (action === 'move') setMoveTarget({ type: 'folder', id: folder.id, name: folder.name });
+    else if (action === 'compress') compressFiles.mutate({ fileIds: [], folderIds: [folder.id], folderId: folder.parentId ?? null });
   }
 
   function handleConfirmTrash() {
@@ -382,6 +431,14 @@ export function MyDrivePage() {
               <FolderPlus className="w-4 h-4" />
               New folder
             </button>
+            <button
+              onClick={() => setShowAiSort(true)}
+              disabled={aiSortStatus?.status === 'processing'}
+              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-violet-700 bg-violet-50 border border-violet-200 rounded-lg hover:bg-violet-100 disabled:opacity-50 transition-colors"
+            >
+              <Sparkles className="w-4 h-4" />
+              {aiSortStatus?.status === 'processing' ? 'Sorting…' : 'AI Sort'}
+            </button>
             <UploadButton folderId={null} />
           </div>
         </div>
@@ -405,6 +462,14 @@ export function MyDrivePage() {
           </section>
         )}
 
+        {/* AI sort in-progress banner */}
+        {aiSortStatus?.status === 'processing' && (
+          <div className="flex items-center gap-3 px-4 py-3 bg-violet-50 border border-violet-200 rounded-xl">
+            <Sparkles className="w-4 h-4 text-violet-500 animate-pulse" />
+            <span className="text-sm font-medium text-violet-800">AI is sorting your files… You'll be notified when done.</span>
+          </div>
+        )}
+
         {/* Bulk action bar */}
         {selectedItems.size > 0 && (
           <div className="flex items-center gap-3 px-4 py-3 bg-brand-50 border border-brand-200 rounded-xl">
@@ -418,6 +483,14 @@ export function MyDrivePage() {
               {selectAllMode ? `${fileTotal} selected` : `${selectedItems.size} selected`}
             </span>
             <div className="flex-1" />
+            <button
+              onClick={handleDownloadZip}
+              disabled={isZipping}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-brand-700 bg-brand-100 rounded-lg hover:bg-brand-200 transition-colors disabled:opacity-50"
+            >
+              <Download className="w-4 h-4" />
+              {isZipping ? 'Zipping…' : 'Download'}
+            </button>
             <button
               onClick={() => setConfirmBulkTrash(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-red-700 bg-red-100 rounded-lg hover:bg-red-200 transition-colors"
@@ -665,6 +738,15 @@ export function MyDrivePage() {
         confirmLabel="Move to trash"
         variant="danger"
         isLoading={bulkTrash.isPending}
+      />
+
+      <AiSortModal
+        open={showAiSort}
+        onClose={() => setShowAiSort(false)}
+        onConfirm={(maxDepth, prompt) => {
+          aiSort.mutate({ maxDepth, prompt }, { onSuccess: () => setShowAiSort(false) });
+        }}
+        isPending={aiSort.isPending}
       />
 
       <ConfirmDialog

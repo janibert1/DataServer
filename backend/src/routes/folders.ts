@@ -6,7 +6,18 @@ import { auditFromRequest } from '../services/auditService';
 import { getEffectivePermission, shareFolder, updateSharePermission, revokeShare } from '../services/sharingService';
 import { notifyFolderShared } from '../services/notificationService';
 import { sanitizeFileName } from '../middleware/upload';
-import { AuditAction, SharePermission } from '@prisma/client';
+import { Prisma, AuditAction, SharePermission } from '@prisma/client';
+import { aiSortQueue, emptyTrashQueue } from '../workers/queues';
+
+async function isAiSortActive(userId: string): Promise<boolean> {
+  const jobs = await aiSortQueue.getJobs(['active', 'waiting', 'delayed']);
+  return jobs.some((j) => j.data.userId === userId);
+}
+
+async function isEmptyTrashActive(userId: string): Promise<boolean> {
+  const jobs = await emptyTrashQueue.getJobs(['active', 'waiting', 'delayed']);
+  return jobs.some((j) => j.data.userId === userId);
+}
 import { sendFolderSharedEmail } from '../lib/mailer';
 import { config } from '../config';
 
@@ -48,12 +59,40 @@ foldersRouter.get('/', async (req: Request, res: Response) => {
     prisma.folder.count({ where }),
   ]);
 
+  // Compute recursive sizes using folderId-based CTE (reliable regardless of path field state)
+  let sizeMap = new Map<string, bigint>();
+  if (folders.length > 0) {
+    const folderIds = folders.map((f) => f.id);
+    try {
+      const sizeRows = await prisma.$queryRaw<{ id: string; totalSize: bigint }[]>(
+        Prisma.sql`
+          WITH RECURSIVE folder_tree AS (
+            SELECT id, id AS root_id FROM "Folder" WHERE id IN (${Prisma.join(folderIds)})
+            UNION ALL
+            SELECT f.id, ft.root_id FROM "Folder" f
+            INNER JOIN folder_tree ft ON f."parentId" = ft.id
+            WHERE f."isTrashed" = false AND f."deletedAt" IS NULL
+          )
+          SELECT ft.root_id AS id, COALESCE(SUM(fi.size), 0)::bigint AS "totalSize"
+          FROM folder_tree ft
+          LEFT JOIN "File" fi
+            ON fi."folderId" = ft.id
+            AND fi."isTrashed" = false
+            AND fi.status = 'ACTIVE'
+          GROUP BY ft.root_id
+        `,
+      );
+      sizeMap = new Map(sizeRows.map((r) => [r.id, r.totalSize]));
+    } catch { /* non-fatal — size will show as null */ }
+  }
+
   res.json({
     folders: folders.map((f) => ({
       ...f,
       isStarred: f.starredBy.length > 0,
       fileCount: f._count.files,
       folderCount: f._count.children,
+      sizeBytes: (sizeMap.get(f.id) ?? BigInt(0)).toString(),
     })),
     total,
   });
@@ -123,6 +162,10 @@ foldersRouter.get('/trashed', async (req: Request, res: Response) => {
 
 foldersRouter.delete('/:id/permanent', async (req: Request, res: Response) => {
   const user = req.user as any;
+  if (await isAiSortActive(user.id)) {
+    res.status(409).json({ error: 'AI sort is in progress. Wait for it to finish before deleting folders.' });
+    return;
+  }
   const { id } = req.params;
 
   const folder = await prisma.folder.findUnique({ where: { id }, select: { ownerId: true, isTrashed: true } });
@@ -153,6 +196,10 @@ foldersRouter.post(
     }
 
     const user = req.user as any;
+    if (await isAiSortActive(user.id)) {
+      res.status(409).json({ error: 'AI sort is in progress. Wait for it to finish before creating folders.' });
+      return;
+    }
     const { name, parentId, color } = req.body;
 
     const safeName = sanitizeFileName(name);
@@ -231,7 +278,29 @@ foldersRouter.get('/:id', async (req: Request, res: Response) => {
     }
   }
 
-  res.json({ folder: { ...folder, isStarred: (folder?.starredBy?.length ?? 0) > 0 } });
+  let folderSizeBytes = '0';
+  if (folder) {
+    try {
+      const [sizeRow] = await prisma.$queryRaw<{ totalSize: bigint }[]>(
+        Prisma.sql`
+          WITH RECURSIVE folder_tree AS (
+            SELECT id FROM "Folder" WHERE id = ${id}
+            UNION ALL
+            SELECT f.id FROM "Folder" f
+            INNER JOIN folder_tree ft ON f."parentId" = ft.id
+            WHERE f."isTrashed" = false AND f."deletedAt" IS NULL
+          )
+          SELECT COALESCE(SUM(fi.size), 0)::bigint AS "totalSize"
+          FROM "File" fi
+          WHERE fi."folderId" IN (SELECT id FROM folder_tree)
+            AND fi."isTrashed" = false
+            AND fi.status = 'ACTIVE'
+        `,
+      );
+      folderSizeBytes = (sizeRow?.totalSize ?? BigInt(0)).toString();
+    } catch { /* non-fatal */ }
+  }
+  res.json({ folder: { ...folder, isStarred: (folder?.starredBy?.length ?? 0) > 0, sizeBytes: folderSizeBytes } });
 });
 
 // ─── Folder contents ─────────────────────────────────────────
@@ -288,6 +357,32 @@ foldersRouter.get('/:id/contents', async (req: Request, res: Response) => {
     prisma.file.count({ where: { folderId: id, isTrashed: false, status: { not: 'DELETED' } } }),
   ]);
 
+  let subSizeMap = new Map<string, bigint>();
+  if (subfolders.length > 0) {
+    try {
+      const subIds = subfolders.map((f) => f.id);
+      const subSizeRows = await prisma.$queryRaw<{ id: string; totalSize: bigint }[]>(
+        Prisma.sql`
+          WITH RECURSIVE folder_tree AS (
+            SELECT id, id AS root_id FROM "Folder" WHERE id IN (${Prisma.join(subIds)})
+            UNION ALL
+            SELECT f.id, ft.root_id FROM "Folder" f
+            INNER JOIN folder_tree ft ON f."parentId" = ft.id
+            WHERE f."isTrashed" = false AND f."deletedAt" IS NULL
+          )
+          SELECT ft.root_id AS id, COALESCE(SUM(fi.size), 0)::bigint AS "totalSize"
+          FROM folder_tree ft
+          LEFT JOIN "File" fi
+            ON fi."folderId" = ft.id
+            AND fi."isTrashed" = false
+            AND fi.status = 'ACTIVE'
+          GROUP BY ft.root_id
+        `,
+      );
+      subSizeMap = new Map(subSizeRows.map((r) => [r.id, r.totalSize]));
+    } catch { /* non-fatal */ }
+  }
+
   res.json({
     permission,
     folders: subfolders.map((f) => ({
@@ -295,6 +390,7 @@ foldersRouter.get('/:id/contents', async (req: Request, res: Response) => {
       isStarred: f.starredBy.length > 0,
       fileCount: f._count.files,
       folderCount: f._count.children,
+      sizeBytes: (subSizeMap.get(f.id) ?? BigInt(0)).toString(),
     })),
     files: files.map((f) => ({ ...f, size: f.size.toString(), isStarred: f.starredBy.length > 0 })),
     pagination: { page: pageNum, limit: limitNum, total: totalFiles, pages: Math.ceil(totalFiles / limitNum) },
@@ -336,10 +432,14 @@ foldersRouter.patch(
 
 foldersRouter.put('/:id/move', async (req: Request, res: Response) => {
   const user = req.user as any;
+  if (await isAiSortActive(user.id)) {
+    res.status(409).json({ error: 'AI sort is in progress. Wait for it to finish before moving folders.' });
+    return;
+  }
   const { id } = req.params;
   const { parentId } = req.body;
 
-  const folder = await prisma.folder.findUnique({ where: { id }, select: { ownerId: true, isTrashed: true } });
+  const folder = await prisma.folder.findUnique({ where: { id }, select: { ownerId: true, isTrashed: true, name: true, path: true, depth: true } });
   if (!folder || folder.isTrashed) {
     res.status(404).json({ error: 'Folder not found.' });
     return;
@@ -353,7 +453,31 @@ foldersRouter.put('/:id/move', async (req: Request, res: Response) => {
     return;
   }
 
-  await prisma.folder.update({ where: { id }, data: { parentId: parentId ?? null } });
+  let newParentPath = '';
+  let newParentDepth = -1;
+  if (parentId) {
+    const newParent = await prisma.folder.findUnique({ where: { id: parentId }, select: { path: true, depth: true } });
+    newParentPath = newParent?.path ?? '';
+    newParentDepth = newParent?.depth ?? -1;
+  }
+  const newPath = newParentPath ? `${newParentPath}/${folder.name}` : `/${folder.name}`;
+  const oldPath = folder.path;
+  const newDepth = newParentDepth + 1;
+  const depthDelta = newDepth - folder.depth;
+
+  await prisma.folder.update({ where: { id }, data: { parentId: parentId ?? null, path: newPath, depth: newDepth } });
+
+  if (oldPath !== newPath || depthDelta !== 0) {
+    const pathOffset = oldPath.length + 1;
+    await prisma.$executeRaw`
+      UPDATE "Folder"
+      SET path = ${newPath} || SUBSTRING(path, ${pathOffset}::int),
+          depth = depth + ${depthDelta}::int
+      WHERE path LIKE ${oldPath + '/%'}
+      AND "ownerId" = ${user.id}
+    `;
+  }
+
   await auditFromRequest(req, AuditAction.FOLDER_MOVED, { entityType: 'Folder', entityId: id, details: { parentId } });
   res.json({ message: 'Folder moved.' });
 });
@@ -362,6 +486,14 @@ foldersRouter.put('/:id/move', async (req: Request, res: Response) => {
 
 foldersRouter.post('/:id/trash', async (req: Request, res: Response) => {
   const user = req.user as any;
+  if (await isAiSortActive(user.id)) {
+    res.status(409).json({ error: 'AI sort is in progress. Wait for it to finish before trashing folders.' });
+    return;
+  }
+  if (await isEmptyTrashActive(user.id)) {
+    res.status(409).json({ error: 'Trash is being emptied. Wait for it to finish before moving folders to trash.' });
+    return;
+  }
   const { id } = req.params;
 
   const folder = await prisma.folder.findUnique({ where: { id }, select: { ownerId: true, isTrashed: true } });

@@ -4,7 +4,7 @@ import { Menu, Transition } from '@headlessui/react';
 import {
   HardDrive, Users, Share2, Clock, Star, Trash2, Settings, Shield,
   Menu as MenuIcon, X, LogOut, ChevronDown, FolderOpen, Upload,
-  LayoutGrid, Zap
+  LayoutGrid, Zap, Download
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuthStore } from '../../store/authStore';
@@ -13,6 +13,7 @@ import { StorageBar } from '../common/StorageBar';
 import { NotificationDropdown } from '../common/NotificationDropdown';
 import { SearchBar } from '../common/SearchBar';
 import { UploadProgressPanel } from '../files/UploadProgressPanel';
+import { DriveOpsPanel } from '../files/DriveOpsPanel';
 import { UploadButton } from '../files/UploadDropzone';
 import { useLocation } from 'react-router-dom';
 
@@ -22,6 +23,7 @@ const navItems = [
   { to: '/drive/shared-by-me', icon: Share2, label: 'Shared by me' },
   { to: '/drive/recent', icon: Clock, label: 'Recent' },
   { to: '/drive/starred', icon: Star, label: 'Starred' },
+  { to: '/drive/downloads', icon: Download, label: 'Downloads' },
   { to: '/drive/trash', icon: Trash2, label: 'Trash' },
 ];
 
@@ -262,6 +264,7 @@ export function DriveLayout() {
       </div>
 
       <UploadProgressPanel />
+      <DriveOpsPanel />
     </div>
   );
 }

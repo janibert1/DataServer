@@ -154,7 +154,9 @@ export function FileList({
               <td className="px-4 py-2.5 text-sm text-slate-500 whitespace-nowrap">
                 {formatDistanceToNow(new Date(folder.updatedAt), { addSuffix: true })}
               </td>
-              <td className="px-4 py-2.5 text-sm text-slate-400">—</td>
+              <td className="px-4 py-2.5 text-sm text-slate-400">
+                {folder.sizeBytes != null ? formatBytes(folder.sizeBytes) : '—'}
+              </td>
               <td className="pr-2">
                 <button
                   onClick={(e) => openMenu(e, folder, 'folder')}

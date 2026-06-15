@@ -21,6 +21,7 @@ import { SharedByMePage } from './pages/drive/SharedByMePage';
 import { RecentPage } from './pages/drive/RecentPage';
 import { StarredPage } from './pages/drive/StarredPage';
 import { TrashPage } from './pages/drive/TrashPage';
+import { DownloadsPage } from './pages/drive/DownloadsPage';
 import { SettingsPage } from './pages/drive/SettingsPage';
 import { SecurityPage } from './pages/drive/SecurityPage';
 
@@ -29,12 +30,17 @@ import { AdminUsersPage } from './pages/admin/AdminUsersPage';
 import { AdminInvitationsPage } from './pages/admin/AdminInvitationsPage';
 import { AdminAuditPage } from './pages/admin/AdminAuditPage';
 import { AdminStoragePage } from './pages/admin/AdminStoragePage';
-import { AdminFlagsPage } from './pages/admin/AdminFlagsPage';
 import { AdminPolicyPage } from './pages/admin/AdminPolicyPage';
 
 // Other
 import { NotFoundPage } from './pages/NotFoundPage';
+import { usePushNotifications } from './hooks/usePushNotifications';
 import { DeviceAuthPage } from './pages/DeviceAuthPage';
+
+function AppInit() {
+  usePushNotifications();
+  return null;
+}
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuthStore();
@@ -85,6 +91,7 @@ function AppRoutes() {
         <Route path="recent" element={<RecentPage />} />
         <Route path="starred" element={<StarredPage />} />
         <Route path="trash" element={<TrashPage />} />
+        <Route path="downloads" element={<DownloadsPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="security" element={<SecurityPage />} />
       </Route>
@@ -96,7 +103,6 @@ function AppRoutes() {
         <Route path="invitations" element={<AdminInvitationsPage />} />
         <Route path="audit" element={<AdminAuditPage />} />
         <Route path="storage" element={<AdminStoragePage />} />
-        <Route path="flags" element={<AdminFlagsPage />} />
         <Route path="policy" element={<AdminPolicyPage />} />
       </Route>
 
@@ -108,6 +114,7 @@ function AppRoutes() {
 export default function App() {
   return (
     <BrowserRouter>
+      <AppInit />
       <AppRoutes />
     </BrowserRouter>
   );

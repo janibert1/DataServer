@@ -246,7 +246,7 @@ export function AdminPolicyPage() {
       {isLoading ? (
         <div className="flex items-center justify-center py-24"><LoadingSpinner size="lg" /></div>
       ) : (
-        <form onSubmit={handleSubmit}>
+        <form onSubmit={handleSubmit} noValidate>
           <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
             <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-2">
               <Settings2 className="w-5 h-5 text-brand-600" />
@@ -261,7 +261,7 @@ export function AdminPolicyPage() {
                   description="Storage quota automatically assigned to new users"
                   value={defaultQuotaGB}
                   onChange={setDefaultQuotaGB}
-                  min={0.1}
+                  min={0.5}
                   step={0.5}
                   suffix="GB"
                 />
@@ -270,7 +270,7 @@ export function AdminPolicyPage() {
                   description="Single file upload size limit"
                   value={maxFileSizeGB}
                   onChange={setMaxFileSizeGB}
-                  min={0.001}
+                  min={0.1}
                   step={0.1}
                   suffix="GB"
                 />

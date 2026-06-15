@@ -3,6 +3,7 @@ import {
   PutObjectCommand,
   GetObjectCommand,
   DeleteObjectCommand,
+  DeleteObjectsCommand,
   HeadObjectCommand,
   CreateBucketCommand,
   HeadBucketCommand,
@@ -93,6 +94,24 @@ export async function deleteFromS3(key: string): Promise<void> {
       Key: key,
     })
   );
+}
+
+// Batch-delete up to 1000 S3 objects per request (S3 DeleteObjects limit).
+// Silently skips keys that no longer exist (S3 treats missing keys as success).
+export async function deleteMultipleFromS3(keys: string[]): Promise<void> {
+  if (keys.length === 0) return;
+  for (let i = 0; i < keys.length; i += 1000) {
+    const chunk = keys.slice(i, i + 1000);
+    await s3Client.send(
+      new DeleteObjectsCommand({
+        Bucket: config.s3.bucket,
+        Delete: {
+          Objects: chunk.map((Key) => ({ Key })),
+          Quiet: true,
+        },
+      })
+    );
+  }
 }
 
 export async function getObjectStream(key: string): Promise<Readable> {

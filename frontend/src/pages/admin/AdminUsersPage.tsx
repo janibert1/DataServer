@@ -59,7 +59,7 @@ function useAdjustQuota() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, quotaGB }: { id: string; quotaGB: number }) =>
-      api.patch(`/admin/users/${id}/quota`, { storageQuotaBytes: Math.round(quotaGB * 1024 ** 3).toString() }),
+      api.patch(`/admin/users/${id}`, { action: 'setQuota', storageQuotaBytes: Math.round(quotaGB * 1024 ** 3).toString() }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['admin', 'users'] }); toast.success('Quota updated.'); },
     onError: (err) => toast.error(getErrorMessage(err)),
   });

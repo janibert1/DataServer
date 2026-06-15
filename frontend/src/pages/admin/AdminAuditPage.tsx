@@ -19,7 +19,7 @@ function useAuditLogs(params: {
   return useQuery({
     queryKey: ['admin', 'audit', params],
     queryFn: async () => {
-      const res = await api.get('/admin/audit', { params });
+      const res = await api.get('/admin/audit-logs', { params });
       return res.data as {
         logs: AuditLog[];
         pagination: { page: number; pages: number; total: number };
@@ -77,7 +77,7 @@ const ACTION_GROUPS = [
 // ── CSV Export ────────────────────────────────────────────────────────────────
 async function exportCSV(params: { action?: string; from?: string; to?: string; search?: string }) {
   try {
-    const res = await api.get('/admin/audit', { params: { ...params, limit: 10000 } });
+    const res = await api.get('/admin/audit-logs', { params: { ...params, limit: 10000 } });
     const logs: AuditLog[] = res.data.logs;
     const headers = ['Timestamp', 'User', 'Email', 'Action', 'Entity Type', 'Entity ID', 'IP Address'];
     const rows = logs.map((log) => [

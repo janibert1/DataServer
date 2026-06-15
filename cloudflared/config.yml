@@ -1,0 +1,6 @@
+tunnel: 4daa5bc5-47bd-4c5f-a051-bd88060a946b
+credentials-file: /etc/cloudflared/creds.json
+ingress:
+  - hostname: data.jdries.nl
+    service: http://frontend
+  - service: http_status:404

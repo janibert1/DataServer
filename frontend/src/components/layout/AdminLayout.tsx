@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { Users, Key, ScrollText, HardDrive, Flag, Settings2, ArrowLeft, Zap } from 'lucide-react';
+import { Users, Key, ScrollText, HardDrive, Settings2, ArrowLeft, Zap } from 'lucide-react';
 import clsx from 'clsx';
 
 const adminNavItems = [
@@ -7,7 +7,7 @@ const adminNavItems = [
   { to: '/admin/invitations', icon: Key, label: 'Invitations' },
   { to: '/admin/audit', icon: ScrollText, label: 'Audit Logs' },
   { to: '/admin/storage', icon: HardDrive, label: 'Storage' },
-  { to: '/admin/flags', icon: Flag, label: 'Content Flags' },
+
   { to: '/admin/policy', icon: Settings2, label: 'Platform Policy' },
 ];
 

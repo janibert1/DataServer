@@ -85,6 +85,17 @@ install_docker() {
 
 gen_secret() { openssl rand -hex 32; }
 gen_pass()   { openssl rand -base64 18 | tr -d '=/+'; }
+gen_vapid_keys() {
+  local tmpkey
+  tmpkey=$(mktemp)
+  openssl ecparam -name prime256v1 -genkey -noout -out "$tmpkey" 2>/dev/null
+  VAPID_PRIVATE_KEY=$(openssl ec -in "$tmpkey" -outform DER 2>/dev/null \
+    | tail -c 32 | base64 -w 0 | tr '+/' '-_' | tr -d '=')
+  VAPID_PUBLIC_KEY=$(openssl ec -in "$tmpkey" -pubout -outform DER 2>/dev/null \
+    | tail -c 65 | base64 -w 0 | tr '+/' '-_' | tr -d '=')
+  rm -f "$tmpkey"
+}
+
 
 # ── whiptail helpers ─────────────────────────────────────────
 wt() { whiptail --title "DataServer Installer v${VERSION}" "$@" 3>&1 1>&2 2>&3; }
@@ -468,6 +479,17 @@ Spaces are fine — paste it as-is."
   fi
 }
 
+step_gemini() {
+  if ! wt_yesno "── AI File Sort (optional) ────────────────────\n\nEnable AI-powered file organisation?\n\nUses Google Gemini to automatically sort,\nrename, and organise your drive files.\n\nYou'll need a Google AI Studio API key:\n  aistudio.google.com -> Get API key\n  (Free tier is sufficient)\n\nEnable AI Sort?"; then
+    GOOGLE_API_KEY=""
+    return
+  fi
+
+  GOOGLE_API_KEY=$(wt_input \
+    "Google AI Studio API key:\n\n(aistudio.google.com -> Get API key)" "") || GOOGLE_API_KEY=""
+  [[ -z "$GOOGLE_API_KEY" ]] && warn "No key entered -- AI Sort will be disabled."
+}
+
 step_confirm() {
   local storage_label="Docker volume (managed)"
   [[ -n "$STORAGE_PATH" ]] && storage_label="$STORAGE_PATH"
@@ -490,6 +512,7 @@ Storage limits    : ${quota_label}
 
 Google OAuth      : ${GOOGLE_CLIENT_ID:+enabled}${GOOGLE_CLIENT_ID:-disabled}
 Email (SMTP)      : ${SMTP_USER:+${SMTP_HOST}}${SMTP_USER:-disabled}
+AI Sort           : ${GOOGLE_API_KEY:+enabled}${GOOGLE_API_KEY:-disabled}
 
 ──────────────────────────────────────────────
 Proceed with installation?" || die "Installation cancelled by user."
@@ -503,6 +526,7 @@ generate_env() {
   SESSION_SECRET=$(gen_secret)
   JWT_SECRET=$(gen_secret)
   DB_PASSWORD=$(gen_pass)
+  gen_vapid_keys
   REDIS_PASSWORD=$(gen_pass)
   MINIO_ROOT_USER="ds_minio"
   MINIO_ROOT_PASSWORD=$(gen_pass)
@@ -576,6 +600,14 @@ RATE_LIMIT_UPLOAD_WINDOW_MS=3600000
 ADMIN_EMAIL=${ADMIN_EMAIL}
 ADMIN_PASSWORD="${ADMIN_PASSWORD}"
 ADMIN_DISPLAY_NAME="${ADMIN_NAME}"
+
+# --- Push Notifications -------------------------
+VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY}
+VAPID_PRIVATE_KEY=${VAPID_PRIVATE_KEY}
+VAPID_EMAIL=mailto:${ADMIN_EMAIL}
+
+# --- AI Sort (Gemini) ---------------------------
+GOOGLE_API_KEY="${GOOGLE_API_KEY:-}"
 EOF
 
   [[ "${ACCESS_MODE}" == "tailscale" || "${ACCESS_MODE}" == "both" ]] && \
@@ -1037,6 +1069,7 @@ main() {
   step_cloudflare_config
   step_google_oauth
   step_smtp
+  step_gemini
   step_confirm
 
   # ── Install with progress bar ──

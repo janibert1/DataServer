@@ -105,15 +105,22 @@ function PreviewContent({ file, previewUrl }: { file: DriveFile; previewUrl: str
   );
 }
 
+const ONE_MB = 1024 * 1024;
+
 export function FilePreviewModal({ file, onClose, onNext, onPrev, hasNext, hasPrev }: Props) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
+  const [rawMode, setRawMode] = useState(false);
+  const [rawContent, setRawContent] = useState<string | null>(null);
+  const [rawLoading, setRawLoading] = useState(false);
 
   useEffect(() => {
     if (!file) return;
     setIsLoading(true);
     setPreviewUrl(null);
+    setRawMode(false);
+    setRawContent(null);
     getFilePreviewUrl(file.id)
       .then((data) => setPreviewUrl(data.previewUrl))
       .catch(() => {})
@@ -129,6 +136,24 @@ export function FilePreviewModal({ file, onClose, onNext, onPrev, hasNext, hasPr
     a.click();
   };
 
+  const handleToggleRaw = async () => {
+    if (rawMode) {
+      setRawMode(false);
+      return;
+    }
+    if (!previewUrl) return;
+    setRawLoading(true);
+    try {
+      const text = await fetch(previewUrl).then((r) => r.text());
+      setRawContent(text);
+      setRawMode(true);
+    } catch {
+      // ignore
+    } finally {
+      setRawLoading(false);
+    }
+  };
+
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === 'ArrowRight' && hasNext) onNext?.();
@@ -138,6 +163,9 @@ export function FilePreviewModal({ file, onClose, onNext, onPrev, hasNext, hasPr
     document.addEventListener('keydown', handleKey);
     return () => document.removeEventListener('keydown', handleKey);
   }, [hasNext, hasPrev, onNext, onPrev, onClose]);
+
+  const fileSize = file ? (typeof file.size === 'string' ? parseInt(file.size) : file.size) : 0;
+  const canRaw = !!file && fileSize < ONE_MB && !!previewUrl;
 
   return (
     <Transition appear show={!!file} as={Fragment}>
@@ -164,6 +192,20 @@ export function FilePreviewModal({ file, onClose, onNext, onPrev, hasNext, hasPr
               <span className="text-white font-medium truncate text-sm">{file?.name}</span>
             </div>
             <div className="flex items-center gap-2">
+              {canRaw && (
+                <button
+                  onClick={handleToggleRaw}
+                  disabled={rawLoading}
+                  className={clsx(
+                    'px-3 py-1.5 text-sm rounded-lg transition-colors font-mono',
+                    rawMode
+                      ? 'bg-white/20 text-white'
+                      : 'text-white/70 hover:text-white hover:bg-white/10'
+                  )}
+                >
+                  {rawLoading ? '…' : rawMode ? 'Normal' : 'Raw'}
+                </button>
+              )}
               <button
                 onClick={() => setShowInfo((s) => !s)}
                 className={clsx('p-1.5 rounded-lg text-white/70 hover:text-white hover:bg-white/10', showInfo && 'bg-white/10 text-white')}
@@ -195,6 +237,15 @@ export function FilePreviewModal({ file, onClose, onNext, onPrev, hasNext, hasPr
             <div className="flex-1 flex items-center justify-center min-w-0 max-w-5xl">
               {isLoading ? (
                 <LoadingSpinner size="xl" className="border-white/30 border-t-white" />
+              ) : rawMode && rawContent !== null ? (
+                <div
+                  className="w-full overflow-auto rounded-lg bg-slate-900 p-4"
+                  style={{ maxHeight: 'calc(85vh - 120px)' }}
+                >
+                  <pre className="text-xs text-slate-300 font-mono whitespace-pre-wrap break-all">
+                    {rawContent}
+                  </pre>
+                </div>
               ) : previewUrl && file ? (
                 <PreviewContent file={file} previewUrl={previewUrl} />
               ) : null}

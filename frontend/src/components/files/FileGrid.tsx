@@ -31,14 +31,6 @@ interface Props {
   onToggleSelect?: (item: SelectionItem) => void;
 }
 
-function formatBytes(bytes: string | number): string {
-  const n = typeof bytes === 'string' ? parseInt(bytes) : bytes;
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 ** 2) return `${(n / 1024).toFixed(0)} KB`;
-  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
-  return `${(n / 1024 ** 3).toFixed(2)} GB`;
-}
-
 function setDragData(e: React.DragEvent, payload: DragDropPayload) {
   e.dataTransfer.setData('application/json', JSON.stringify(payload));
   e.dataTransfer.effectAllowed = 'move';
@@ -50,6 +42,15 @@ function getDragData(e: React.DragEvent): DragDropPayload | null {
   } catch {
     return null;
   }
+}
+
+function formatBytes(bytes: string | number): string {
+  const b = typeof bytes === 'string' ? parseFloat(bytes) : bytes;
+  if (b === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(b) / Math.log(k));
+  return `${parseFloat((b / k ** i).toFixed(1))} ${sizes[i]}`;
 }
 
 function FolderCard({
@@ -146,6 +147,7 @@ function FolderCard({
         <p className="text-xs text-slate-400 mt-1">
           {folder.fileCount} file{folder.fileCount !== 1 ? 's' : ''}
           {folder.folderCount > 0 && `, ${folder.folderCount} folder${folder.folderCount !== 1 ? 's' : ''}`}
+          {folder.sizeBytes && parseInt(folder.sizeBytes) > 0 && ` · ${formatBytes(folder.sizeBytes)}`}
         </p>
       </div>
 

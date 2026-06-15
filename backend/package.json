@@ -50,7 +50,11 @@
     "winston-daily-rotate-file": "^5.0.0",
     "xss": "^1.0.15",
     "date-fns": "^3.6.0",
-    "crypto": "^1.0.1"
+    "crypto": "^1.0.1",
+    "web-push": "^3.6.7",
+    "archiver": "^7.0.1",
+    "unzipper": "^0.10.14",
+    "@aws-sdk/lib-storage": "^3.540.0"
   },
   "devDependencies": {
     "@types/compression": "^1.7.5",
@@ -73,6 +77,9 @@
     "@types/uuid": "^9.0.8",
     "prisma": "^5.10.0",
     "tsx": "^4.7.1",
-    "typescript": "^5.4.2"
+    "typescript": "^5.4.2",
+    "@types/web-push": "^3.6.3",
+    "@types/archiver": "^6.0.3",
+    "@types/unzipper": "^0.10.10"
   }
 }

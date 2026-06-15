@@ -6,10 +6,8 @@ import { prisma } from '../lib/prisma';
 import { logger } from '../lib/logger';
 
 const BLOCKED_EXTENSIONS = new Set([
-  '.exe', '.bat', '.cmd', '.sh', '.ps1', '.ps2', '.vbs', '.vbe', '.js', '.jse',
-  '.wsf', '.wsh', '.msc', '.msi', '.msp', '.com', '.scr', '.hta', '.cpl',
-  '.dll', '.sys', '.drv', '.ocx', '.inf', '.reg', '.lnk', '.jar', '.py',
-  '.rb', '.php', '.asp', '.aspx', '.jsp', '.so', '.dylib',
+  '.exe', '.bat', '.cmd', '.com', '.msi', '.msp', '.scr', '.cpl',
+  '.dll', '.sys', '.drv', '.ocx',
 ]);
 
 async function getMaxFileSize(): Promise<number> {

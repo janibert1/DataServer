@@ -31,11 +31,21 @@ function useStorageStats() {
   });
 }
 
+function useStorageOverview() {
+  return useQuery({
+    queryKey: ['admin', 'storage-overview'],
+    queryFn: async () => {
+      const res = await api.get('/admin/storage-overview');
+      return res.data as { capacityBytes: string | null; occupiedBytes: string; allocatedQuotaBytes: string };
+    },
+  });
+}
+
 function useAdjustQuota() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, quotaGB }: { id: string; quotaGB: number }) =>
-      api.patch(`/admin/users/${id}/quota`, { storageQuotaBytes: Math.round(quotaGB * 1024 ** 3).toString() }),
+      api.patch(`/admin/users/${id}`, { action: 'setQuota', storageQuotaBytes: Math.round(quotaGB * 1024 ** 3).toString() }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['admin', 'storage-stats'] });
       qc.invalidateQueries({ queryKey: ['admin', 'users'] });
@@ -152,6 +162,7 @@ function PercentBar({ percent }: { percent: number }) {
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export function AdminStoragePage() {
   const { data, isLoading } = useStorageStats();
+  const { data: overview } = useStorageOverview();
   const adjustQuota = useAdjustQuota();
   const [quotaUser, setQuotaUser] = useState<StorageStats['topUsers'][0] | null>(null);
 
@@ -211,6 +222,18 @@ export function AdminStoragePage() {
               <p className="text-sm text-slate-500 mt-1">registered accounts</p>
             </div>
           </div>
+
+          {/* System capacity banner */}
+          {overview?.capacityBytes && (
+            <div className="bg-brand-50 border border-brand-200 rounded-xl p-4 flex items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-semibold text-brand-800">System capacity: {formatBytes(overview.capacityBytes)}</p>
+                <p className="text-xs text-brand-600 mt-0.5">
+                  {formatBytes(overview.occupiedBytes)} files stored · {formatBytes(data?.totalAllocatedBytes ?? '0')} allocated across user quotas
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* Top users by storage */}
           <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">

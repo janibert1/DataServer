@@ -5,6 +5,7 @@ import { DriveFolder, SharePermission } from '../types';
 
 export function useFolders(parentId?: string | null) {
   return useQuery({
+    staleTime: 30_000,
     queryKey: ['folders', parentId ?? 'root'],
     queryFn: async () => {
       const res = await api.get('/folders', {

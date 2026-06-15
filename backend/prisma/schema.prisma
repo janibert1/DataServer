@@ -146,6 +146,8 @@ model User {
   reviewedFlags      ContentFlag[]  @relation("FlagReviewer")
   starredItems       StarredItem[]
   apiTokens          ApiToken[]
+  pushSubscriptions  PushSubscription[]
+  zipDownloads       ZipDownload[]
 
   @@index([email])
   @@index([googleId])
@@ -435,4 +437,44 @@ model StoragePolicy {
   versionRetentionCount   Int      @default(10)
   totalDriveCapacityBytes BigInt?
   updatedAt               DateTime @updatedAt
+}
+
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+enum ZipDownloadStatus {
+  QUEUED
+  PROCESSING
+  READY
+  FAILED
+}
+
+model ZipDownload {
+  id           String            @id @default(cuid())
+  userId       String
+  user         User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status       ZipDownloadStatus @default(QUEUED)
+  name         String
+  fileIds      String[]
+  folderIds    String[]
+  storageKey   String?
+  sizeBytes    BigInt?
+  fileCount    Int?
+  errorMessage String?
+  expiresAt    DateTime?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  @@index([userId])
+  @@index([status])
+  @@index([expiresAt])
 }

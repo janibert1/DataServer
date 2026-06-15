@@ -1,9 +1,9 @@
 import { useState, useEffect, Fragment, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { Grid, List, FolderPlus, ChevronDown, Share2, Pencil, X, Trash2, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Grid, List, FolderPlus, ChevronDown, Share2, Pencil, X, Trash2, Download, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Dialog, Transition } from '@headlessui/react';
 import { useFolderContents, useFolder, useTrashFolder, useStarFolder, useMoveFolder, useRenameFolder, useCreateFolder } from '../../hooks/useFolders';
-import { useTrashFile, useStarFile, useMoveFile, useRenameFile, useBulkTrash, getFileDownloadUrl } from '../../hooks/useFiles';
+import { useTrashFile, useStarFile, useMoveFile, useRenameFile, useBulkTrash, useCompressFiles, useExtractFile, getFileDownloadUrl } from '../../hooks/useFiles';
 import { FileGrid, DragDropPayload, SelectionItem } from '../../components/files/FileGrid';
 import { FileList } from '../../components/files/FileList';
 import { FilePreviewModal } from '../../components/files/FilePreviewModal';
@@ -22,6 +22,15 @@ import { useAuthStore } from '../../store/authStore';
 import clsx from 'clsx';
 import { api } from '../../lib/axios';
 import toast from 'react-hot-toast';
+
+function formatBytes(bytes: string | number): string {
+  const b = typeof bytes === 'string' ? parseFloat(bytes) : bytes;
+  if (b === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(b) / Math.log(k));
+  return `${parseFloat((b / k ** i).toFixed(1))} ${sizes[i]}`;
+}
 
 const PERMISSION_LABELS: Record<string, string> = {
   VIEWER: 'Viewer', DOWNLOADER: 'Downloader', CONTRIBUTOR: 'Contributor',
@@ -120,6 +129,8 @@ export function FolderPage() {
   const renameFolder = useRenameFolder();
   const createFolder = useCreateFolder();
   const bulkTrash = useBulkTrash();
+  const compressFiles = useCompressFiles();
+  const extractFile = useExtractFile();
 
   // Build breadcrumb chain
   useEffect(() => {
@@ -214,6 +225,45 @@ export function FolderPage() {
     });
   }
 
+
+  const [isZipping, setIsZipping] = useState(false);
+
+  async function handleDownloadZip() {
+    const fileIds: string[] = [];
+    const folderIds: string[] = [];
+    selectedItems.forEach((key) => {
+      if (key.startsWith('file:')) fileIds.push(key.slice(5));
+      else if (key.startsWith('folder:')) folderIds.push(key.slice(7));
+    });
+    if (fileIds.length === 0 && folderIds.length === 0) return;
+    setIsZipping(true);
+    try {
+      // Try as blob first (sync zip), fall back to JSON (async)
+      const resp = await api.post('/files/download-zip', { fileIds, folderIds }, { responseType: 'blob' });
+      const text = await resp.data.text();
+      let json: any;
+      try { json = JSON.parse(text); } catch { json = null; }
+      if (json?.async) {
+        toast.success('Your archive is being prepared. Check the Downloads tab.');
+        navigate('/drive/downloads');
+      } else {
+        const blob = new Blob([resp.data], { type: 'application/zip' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const cd = resp.headers['content-disposition'] ?? '';
+        const m = cd.match(/filename="([^"]+)"/);
+        a.download = m?.[1] ?? 'download.zip';
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+    } catch {
+      toast.error('Download failed');
+    } finally {
+      setIsZipping(false);
+    }
+  }
+
   const handleFileAction = (action: string, file: DriveFile) => {
     switch (action) {
       case 'preview': setPreviewFile(file); break;
@@ -227,6 +277,8 @@ export function FolderPage() {
       case 'trash': setConfirmTrash({ type: 'file', id: file.id, name: file.name }); break;
       case 'rename': setRenameTarget({ type: 'file', id: file.id, name: file.name }); break;
       case 'move': setMoveTarget({ type: 'file', id: file.id, name: file.name }); break;
+      case 'compress': compressFiles.mutate({ fileIds: [file.id], folderIds: [], folderId: file.folderId ?? folderId ?? null }); break;
+      case 'extract': extractFile.mutate(file.id); break;
     }
   };
 
@@ -238,6 +290,7 @@ export function FolderPage() {
       case 'rename': setRenameTarget({ type: 'folder', id: folder.id, name: folder.name }); break;
       case 'move': setMoveTarget({ type: 'folder', id: folder.id, name: folder.name }); break;
       case 'share': setShowShare(true); break;
+      case 'compress': compressFiles.mutate({ fileIds: [], folderIds: [folder.id], folderId: folderId ?? null }); break;
     }
   };
 
@@ -295,7 +348,12 @@ export function FolderPage() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <h1 className="text-xl font-bold text-slate-900">{folderData?.name ?? 'Folder'}</h1>
+            <div>
+              <h1 className="text-xl font-bold text-slate-900">{folderData?.name ?? 'Folder'}</h1>
+              {folderData?.sizeBytes && parseInt(folderData.sizeBytes) > 0 && (
+                <p className="text-xs text-slate-400 mt-0.5">{formatBytes(folderData.sizeBytes)} total</p>
+              )}
+            </div>
             {permission && (
               <span className={clsx('text-xs font-medium px-2.5 py-1 rounded-full', PERMISSION_COLORS[permission])}>
                 {PERMISSION_LABELS[permission]}
@@ -341,6 +399,14 @@ export function FolderPage() {
               {selectAllMode ? `${fileTotal} selected` : `${selectedItems.size} selected`}
             </span>
             <div className="flex-1" />
+            <button
+              onClick={handleDownloadZip}
+              disabled={isZipping}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-brand-700 bg-brand-100 rounded-lg hover:bg-brand-200 transition-colors disabled:opacity-50"
+            >
+              <Download className="w-4 h-4" />
+              {isZipping ? 'Zipping…' : 'Download'}
+            </button>
             <button
               onClick={() => setConfirmBulkTrash(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-red-700 bg-red-100 rounded-lg hover:bg-red-200 transition-colors"

@@ -14,7 +14,8 @@ export type NotificationType =
   | 'STORAGE_NEARLY_FULL'
   | 'SUSPICIOUS_LOGIN'
   | 'SECURITY_CHANGE'
-  | 'FILE_FLAGGED';
+  | 'FILE_FLAGGED'
+  | 'TASK_COMPLETED';
 
 export type AuditAction =
   | 'USER_REGISTERED' | 'USER_LOGIN' | 'USER_LOGIN_FAILED' | 'USER_LOGOUT'
@@ -83,6 +84,7 @@ export interface DriveFolder {
   trashedAt: string | null;
   fileCount: number;
   folderCount: number;
+  sizeBytes?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -195,13 +197,27 @@ export interface PaginatedResponse<T> {
 
 // ─── Upload ──────────────────────────────────────────────────
 
+export interface ChunkedUploadState {
+  fileId: string;
+  uploadId: string;
+  storageKey: string;
+  name: string;
+  size: number;
+  mimeType: string;
+  folderId: string | null;
+  completedParts: { partNumber: number; etag: string }[];
+  totalChunks: number;
+  chunkSize: number;
+}
+
 export interface UploadItem {
   id: string;
-  file: File;
+  file: File | null;
   progress: number;
-  status: 'pending' | 'uploading' | 'complete' | 'error';
+  status: 'pending' | 'uploading' | 'complete' | 'error' | 'paused';
   error?: string;
   result?: DriveFile;
+  chunked?: ChunkedUploadState;
 }
 
 // ─── UI ──────────────────────────────────────────────────────

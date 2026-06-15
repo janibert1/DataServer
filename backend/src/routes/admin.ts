@@ -211,63 +211,79 @@ adminRouter.delete('/invitations/:id', async (req: Request, res: Response) => {
 // ─── Audit logs ──────────────────────────────────────────────
 
 adminRouter.get('/audit-logs', async (req: Request, res: Response) => {
-  const { userId, action, from, to, page = '1', limit = '50' } = req.query as any;
-  const pageNum = Math.max(1, parseInt(page));
-  const limitNum = Math.min(200, parseInt(limit));
-  const skip = (pageNum - 1) * limitNum;
+  try {
+    const { userId, action, from, to, search, page = '1', limit = '50' } = req.query as any;
+    const pageNum = Math.max(1, parseInt(page));
+    const limitNum = Math.min(200, parseInt(limit));
+    const skip = (pageNum - 1) * limitNum;
 
-  const where: any = {};
-  if (userId) where.userId = userId;
-  if (action) where.action = action;
-  if (from || to) {
-    where.createdAt = {};
-    if (from) where.createdAt.gte = new Date(from);
-    if (to) where.createdAt.lte = new Date(to);
+    const where: any = {};
+    if (userId) where.userId = userId;
+    if (action) where.action = action;
+    if (from || to) {
+      where.createdAt = {};
+      if (from) where.createdAt.gte = new Date(from);
+      if (to) where.createdAt.lte = new Date(to);
+    }
+    if (search) {
+      where.user = {
+        OR: [
+          { displayName: { contains: search, mode: 'insensitive' } },
+          { email: { contains: search, mode: 'insensitive' } },
+        ],
+      };
+    }
+
+    const [logs, total] = await Promise.all([
+      prisma.auditLog.findMany({
+        where,
+        include: { user: { select: { id: true, displayName: true, email: true } } },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limitNum,
+      }),
+      prisma.auditLog.count({ where }),
+    ]);
+
+    res.json({ logs, pagination: { page: pageNum, limit: limitNum, total, pages: Math.ceil(total / limitNum) } });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message ?? 'Internal error' });
   }
-
-  const [logs, total] = await Promise.all([
-    prisma.auditLog.findMany({
-      where,
-      include: { user: { select: { id: true, displayName: true, email: true } } },
-      orderBy: { createdAt: 'desc' },
-      skip,
-      take: limitNum,
-    }),
-    prisma.auditLog.count({ where }),
-  ]);
-
-  res.json({ logs, pagination: { page: pageNum, limit: limitNum, total, pages: Math.ceil(total / limitNum) } });
 });
 
 // ─── Storage stats ───────────────────────────────────────────
 
 adminRouter.get('/storage-stats', async (req: Request, res: Response) => {
-  const [topUsers, totals] = await Promise.all([
-    prisma.user.findMany({
-      where: { status: 'ACTIVE' },
-      orderBy: { storageUsedBytes: 'desc' },
-      take: 10,
-      select: {
-        id: true, displayName: true, email: true,
-        storageUsedBytes: true, storageQuotaBytes: true,
-      },
-    }),
-    prisma.user.aggregate({
-      _sum: { storageUsedBytes: true, storageQuotaBytes: true },
-    }),
-  ]);
+  try {
+    const [topUsers, totals, userCount] = await Promise.all([
+      prisma.user.findMany({
+        where: { status: 'ACTIVE' },
+        orderBy: { storageUsedBytes: 'desc' },
+        take: 10,
+        select: {
+          id: true, displayName: true, email: true,
+          storageUsedBytes: true, storageQuotaBytes: true,
+        },
+      }),
+      prisma.user.aggregate({
+        _sum: { storageUsedBytes: true, storageQuotaBytes: true },
+      }),
+      prisma.user.count({ where: { status: 'ACTIVE' } }),
+    ]);
 
-  res.json({
-    topUsers: topUsers.map((u) => ({
-      ...u,
-      storageUsedBytes: u.storageUsedBytes.toString(),
-      storageQuotaBytes: u.storageQuotaBytes.toString(),
-    })),
-    totals: {
-      usedBytes: totals._sum.storageUsedBytes?.toString() ?? '0',
-      quotaBytes: totals._sum.storageQuotaBytes?.toString() ?? '0',
-    },
-  });
+    res.json({
+      totalUsedBytes: totals._sum.storageUsedBytes?.toString() ?? '0',
+      totalAllocatedBytes: totals._sum.storageQuotaBytes?.toString() ?? '0',
+      userCount,
+      topUsers: topUsers.map((u) => ({
+        ...u,
+        storageUsedBytes: u.storageUsedBytes.toString(),
+        storageQuotaBytes: u.storageQuotaBytes.toString(),
+      })),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message ?? 'Internal error' });
+  }
 });
 
 // ─── Content flags ───────────────────────────────────────────
@@ -322,72 +338,80 @@ adminRouter.patch('/flags/:id', async (req: Request, res: Response) => {
 // ─── Storage policy ──────────────────────────────────────────
 
 adminRouter.get('/policy', async (_req: Request, res: Response) => {
-  let policy = await prisma.storagePolicy.findFirst();
-  if (!policy) {
-    policy = await prisma.storagePolicy.create({ data: {} });
+  try {
+    let policy = await prisma.storagePolicy.findFirst();
+    if (!policy) {
+      policy = await prisma.storagePolicy.create({ data: {} });
+    }
+    res.json({
+      policy: {
+        ...policy,
+        defaultQuotaBytes: policy.defaultQuotaBytes.toString(),
+        maxFileSizeBytes: policy.maxFileSizeBytes.toString(),
+        totalDriveCapacityBytes: policy.totalDriveCapacityBytes?.toString() ?? null,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message ?? 'Internal error' });
   }
-  res.json({
-    policy: {
-      ...policy,
-      defaultQuotaBytes: policy.defaultQuotaBytes.toString(),
-      maxFileSizeBytes: policy.maxFileSizeBytes.toString(),
-      totalDriveCapacityBytes: policy.totalDriveCapacityBytes?.toString() ?? null,
-    },
-  });
 });
 
 adminRouter.patch('/policy', async (req: Request, res: Response) => {
   const admin = req.user as any;
-  const {
-    defaultQuotaBytes, maxFileSizeBytes, allowedMimeTypes,
-    blockedExtensions, trashRetentionDays, versionRetentionCount,
-    totalDriveCapacityBytes,
-  } = req.body;
+  try {
+    const {
+      defaultQuotaBytes, maxFileSizeBytes, allowedMimeTypes,
+      blockedExtensions, trashRetentionDays, versionRetentionCount,
+      totalDriveCapacityBytes,
+    } = req.body;
 
-  const data: any = {};
-  if (defaultQuotaBytes !== undefined) data.defaultQuotaBytes = BigInt(defaultQuotaBytes);
-  if (maxFileSizeBytes !== undefined) data.maxFileSizeBytes = BigInt(maxFileSizeBytes);
-  if (allowedMimeTypes !== undefined) data.allowedMimeTypes = allowedMimeTypes;
-  if (blockedExtensions !== undefined) data.blockedExtensions = blockedExtensions;
-  if (trashRetentionDays !== undefined) data.trashRetentionDays = parseInt(trashRetentionDays);
-  if (versionRetentionCount !== undefined) data.versionRetentionCount = parseInt(versionRetentionCount);
+    const data: any = {};
+    if (defaultQuotaBytes !== undefined) data.defaultQuotaBytes = BigInt(defaultQuotaBytes);
+    if (maxFileSizeBytes !== undefined) data.maxFileSizeBytes = BigInt(maxFileSizeBytes);
+    if (allowedMimeTypes !== undefined) data.allowedMimeTypes = allowedMimeTypes;
+    if (blockedExtensions !== undefined) data.blockedExtensions = blockedExtensions;
+    if (trashRetentionDays !== undefined) data.trashRetentionDays = parseInt(trashRetentionDays);
+    if (versionRetentionCount !== undefined) data.versionRetentionCount = parseInt(versionRetentionCount);
 
-  if (totalDriveCapacityBytes !== undefined) {
-    if (totalDriveCapacityBytes === null || totalDriveCapacityBytes === '') {
-      data.totalDriveCapacityBytes = null;
-    } else {
-      const capacityBig = BigInt(totalDriveCapacityBytes);
-      const validation = await validateCapacitySetting(capacityBig);
-      if (!validation.valid) {
-        res.status(400).json({ error: validation.error });
-        return;
+    if (totalDriveCapacityBytes !== undefined) {
+      if (totalDriveCapacityBytes === null || totalDriveCapacityBytes === '') {
+        data.totalDriveCapacityBytes = null;
+      } else {
+        const capacityBig = BigInt(totalDriveCapacityBytes);
+        const validation = await validateCapacitySetting(capacityBig);
+        if (!validation.valid) {
+          res.status(400).json({ error: validation.error });
+          return;
+        }
+        data.totalDriveCapacityBytes = capacityBig;
       }
-      data.totalDriveCapacityBytes = capacityBig;
     }
+
+    let policy = await prisma.storagePolicy.findFirst();
+    if (!policy) {
+      policy = await prisma.storagePolicy.create({ data });
+    } else {
+      policy = await prisma.storagePolicy.update({ where: { id: policy.id }, data });
+    }
+
+    await auditFromRequest(req, AuditAction.ADMIN_ACTION, {
+      entityType: 'StoragePolicy',
+      entityId: policy.id,
+      details: { performedBy: admin.id, changes: req.body },
+    });
+
+    res.json({
+      message: 'Policy updated.',
+      policy: {
+        ...policy,
+        defaultQuotaBytes: policy.defaultQuotaBytes.toString(),
+        maxFileSizeBytes: policy.maxFileSizeBytes.toString(),
+        totalDriveCapacityBytes: policy.totalDriveCapacityBytes?.toString() ?? null,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message ?? 'Internal error' });
   }
-
-  let policy = await prisma.storagePolicy.findFirst();
-  if (!policy) {
-    policy = await prisma.storagePolicy.create({ data });
-  } else {
-    policy = await prisma.storagePolicy.update({ where: { id: policy.id }, data });
-  }
-
-  await auditFromRequest(req, AuditAction.ADMIN_ACTION, {
-    entityType: 'StoragePolicy',
-    entityId: policy.id,
-    details: { performedBy: admin.id, changes: req.body },
-  });
-
-  res.json({
-    message: 'Policy updated.',
-    policy: {
-      ...policy,
-      defaultQuotaBytes: policy.defaultQuotaBytes.toString(),
-      maxFileSizeBytes: policy.maxFileSizeBytes.toString(),
-      totalDriveCapacityBytes: policy.totalDriveCapacityBytes?.toString() ?? null,
-    },
-  });
 });
 
 // ─── Storage overview ────────────────────────────────────────

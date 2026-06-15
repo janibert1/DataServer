@@ -38,3 +38,21 @@ export const emptyTrashQueue = new Queue('empty-trash-queue', {
   connection,
   defaultJobOptions,
 });
+
+// Queue for AI-driven file sorting
+export const aiSortQueue = new Queue('ai-sort-queue', {
+  connection,
+  defaultJobOptions,
+});
+
+// Queue for async zip generation
+export const zipQueue = new Queue('zip-queue', {
+  connection,
+  defaultJobOptions,
+});
+
+// Queue for compress-to-drive and extract operations
+export const driveOpsQueue = new Queue('drive-ops-queue', {
+  connection,
+  defaultJobOptions,
+});

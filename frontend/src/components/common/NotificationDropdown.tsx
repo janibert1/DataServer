@@ -1,6 +1,7 @@
 import { Fragment } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Menu, Transition } from '@headlessui/react';
-import { Bell, Check, Trash2, FolderOpen, Shield, HardDrive, AlertTriangle, UserCheck } from 'lucide-react';
+import { Bell, Check, CheckCircle2, Trash2, FolderOpen, Shield, HardDrive, AlertTriangle, UserCheck } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import clsx from 'clsx';
 import { useNotifications, useMarkAllNotificationsRead, useMarkNotificationRead } from '../../hooks/useNotifications';
@@ -16,9 +17,10 @@ function NotificationIcon({ type }: { type: NotificationType }) {
     SUSPICIOUS_LOGIN: { icon: AlertTriangle, color: 'text-red-600 bg-red-50' },
     SECURITY_CHANGE: { icon: Shield, color: 'text-purple-600 bg-purple-50' },
     FILE_FLAGGED: { icon: AlertTriangle, color: 'text-red-600 bg-red-50' },
+    TASK_COMPLETED: { icon: CheckCircle2, color: 'text-emerald-600 bg-emerald-50' },
   };
 
-  const config = icons[type];
+  const config = icons[type] ?? { icon: Bell, color: 'text-slate-500 bg-slate-100' };
   const Icon = config.icon;
 
   return (
@@ -29,6 +31,7 @@ function NotificationIcon({ type }: { type: NotificationType }) {
 }
 
 function NotificationItem({ notification, onMarkRead }: { notification: Notification; onMarkRead: (id: string) => void }) {
+  const navigate = useNavigate();
   return (
     <div
       className={clsx(
@@ -37,7 +40,7 @@ function NotificationItem({ notification, onMarkRead }: { notification: Notifica
       )}
       onClick={() => {
         if (!notification.isRead) onMarkRead(notification.id);
-        if (notification.link) window.location.href = notification.link;
+        if (notification.link) navigate(notification.link);
       }}
     >
       <NotificationIcon type={notification.type} />
