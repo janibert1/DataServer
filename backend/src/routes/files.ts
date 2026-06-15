@@ -173,12 +173,12 @@ filesRouter.post('/empty-trash', async (req: Request, res: Response) => {
       return;
     }
 
-    // Remove stale failed jobs — BullMQ won't enqueue a new job when one with the
-    // same jobId already exists in failed state, so retries would silently do nothing.
-    const failedJobs = await emptyTrashQueue.getJobs(['failed']);
-    const staleFailedJob = failedJobs.find((j) => j.data.userId === user.id);
-    if (staleFailedJob) {
-      await staleFailedJob.remove();
+    // Remove stale terminal jobs (failed or completed) — BullMQ won't enqueue a new
+    // job when one with the same jobId still exists in either state, so subsequent
+    // empty-trash calls would silently return the old job and never run.
+    const terminalJobs = await emptyTrashQueue.getJobs(['failed', 'completed']);
+    for (const j of terminalJobs) {
+      if (j.data.userId === user.id) await j.remove();
     }
 
     // Quick existence check instead of full COUNT (fast even with 200k+ items)
