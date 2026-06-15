@@ -111,10 +111,35 @@ adminRouter.patch('/users/:id', async (req: Request, res: Response) => {
       updateData.deletedAt = new Date();
       auditAction = AuditAction.USER_DELETED;
       break;
-    case 'setQuota':
-      if (storageQuotaBytes) updateData.storageQuotaBytes = BigInt(storageQuotaBytes);
+    case 'setQuota': {
+      let newQuota: bigint;
+      try {
+        newQuota = BigInt(storageQuotaBytes);
+      } catch {
+        res.status(400).json({ error: 'storageQuotaBytes must be a valid integer.' });
+        return;
+      }
+      if (newQuota < BigInt(0)) {
+        res.status(400).json({ error: 'Quota cannot be negative.' });
+        return;
+      }
+      if (newQuota < user.storageUsedBytes) {
+        res.status(400).json({ error: `Quota cannot be set below the user's current usage (${user.storageUsedBytes} bytes).` });
+        return;
+      }
+      const quotaPolicy = await prisma.storagePolicy.findFirst({ select: { totalDriveCapacityBytes: true } });
+      if (quotaPolicy?.totalDriveCapacityBytes) {
+        const allocated = await getTotalAllocatedQuota();
+        const headroom = quotaPolicy.totalDriveCapacityBytes - allocated + user.storageQuotaBytes;
+        if (newQuota > headroom) {
+          res.status(400).json({ error: `Quota would exceed total drive capacity. Available headroom: ${headroom} bytes.` });
+          return;
+        }
+      }
+      updateData.storageQuotaBytes = newQuota;
       auditAction = AuditAction.QUOTA_CHANGED;
       break;
+    }
     case 'setRole':
       if (role) updateData.role = role;
       auditAction = AuditAction.ADMIN_ACTION;
@@ -366,12 +391,31 @@ adminRouter.patch('/policy', async (req: Request, res: Response) => {
     } = req.body;
 
     const data: any = {};
-    if (defaultQuotaBytes !== undefined) data.defaultQuotaBytes = BigInt(defaultQuotaBytes);
-    if (maxFileSizeBytes !== undefined) data.maxFileSizeBytes = BigInt(maxFileSizeBytes);
+
+    if (defaultQuotaBytes !== undefined) {
+      let v: bigint;
+      try { v = BigInt(defaultQuotaBytes); } catch { res.status(400).json({ error: 'defaultQuotaBytes must be a valid integer.' }); return; }
+      if (v < BigInt(1)) { res.status(400).json({ error: 'defaultQuotaBytes must be at least 1 byte.' }); return; }
+      data.defaultQuotaBytes = v;
+    }
+    if (maxFileSizeBytes !== undefined) {
+      let v: bigint;
+      try { v = BigInt(maxFileSizeBytes); } catch { res.status(400).json({ error: 'maxFileSizeBytes must be a valid integer.' }); return; }
+      if (v < BigInt(1)) { res.status(400).json({ error: 'maxFileSizeBytes must be at least 1 byte.' }); return; }
+      data.maxFileSizeBytes = v;
+    }
     if (allowedMimeTypes !== undefined) data.allowedMimeTypes = allowedMimeTypes;
     if (blockedExtensions !== undefined) data.blockedExtensions = blockedExtensions;
-    if (trashRetentionDays !== undefined) data.trashRetentionDays = parseInt(trashRetentionDays);
-    if (versionRetentionCount !== undefined) data.versionRetentionCount = parseInt(versionRetentionCount);
+    if (trashRetentionDays !== undefined) {
+      const v = parseInt(trashRetentionDays);
+      if (isNaN(v) || v < 1) { res.status(400).json({ error: 'trashRetentionDays must be a positive integer.' }); return; }
+      data.trashRetentionDays = v;
+    }
+    if (versionRetentionCount !== undefined) {
+      const v = parseInt(versionRetentionCount);
+      if (isNaN(v) || v < 0) { res.status(400).json({ error: 'versionRetentionCount must be a non-negative integer.' }); return; }
+      data.versionRetentionCount = v;
+    }
 
     if (totalDriveCapacityBytes !== undefined) {
       if (totalDriveCapacityBytes === null || totalDriveCapacityBytes === '') {
@@ -448,7 +492,23 @@ adminRouter.post('/redistribute-quotas', async (req: Request, res: Response) => 
     return;
   }
 
-  const result = await proportionallyReduceQuotas(BigInt(targetCapacityBytes), preview === true);
+  let capacityBig: bigint;
+  try {
+    capacityBig = BigInt(targetCapacityBytes);
+  } catch {
+    res.status(400).json({ error: 'targetCapacityBytes must be a valid integer.' });
+    return;
+  }
+  if (capacityBig < BigInt(1)) {
+    res.status(400).json({ error: 'targetCapacityBytes must be at least 1 byte.' });
+    return;
+  }
+  const redistributeValidation = await validateCapacitySetting(capacityBig);
+  if (!redistributeValidation.valid) {
+    res.status(400).json({ error: redistributeValidation.error });
+    return;
+  }
+  const result = await proportionallyReduceQuotas(capacityBig, preview === true);
 
   if (!preview && result.adjusted) {
     await auditFromRequest(req, AuditAction.ADMIN_ACTION, {
