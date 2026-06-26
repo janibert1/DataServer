@@ -40,12 +40,17 @@ export default function SetupPage({ onConfigured }: Props) {
       api_token: apiToken,
       source_name: sourceName,
       folders: [],
-      excludes: ["node_modules", ".git", "__pycache__", "*.pyc", ".DS_Store", "target", "*.class"],
+      excludes: [],
       auto_sync_minutes: 0,
       last_sync: null,
+      sync_on_startup: true,
+      max_file_size_mb: 500,
+      smart_excludes: ["package_caches", "build_artifacts", "caches_temp"],
     };
     try {
       await invoke("save_config", { config });
+      // Silently set up autostart
+      invoke("setup_autostart").catch(() => {});
       onConfigured(config);
     } catch (e) {
       setTestResult({ ok: false, msg: String(e) });

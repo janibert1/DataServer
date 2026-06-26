@@ -21,6 +21,27 @@ pub struct Config {
     pub excludes: Vec<String>,
     pub auto_sync_minutes: u32,
     pub last_sync: Option<String>,
+    #[serde(default = "default_true")]
+    pub sync_on_startup: bool,
+    #[serde(default = "default_max_file_size")]
+    pub max_file_size_mb: u64,
+    #[serde(default = "default_smart_excludes")]
+    pub smart_excludes: Vec<String>,
+}
+
+fn default_true() -> bool { true }
+fn default_max_file_size() -> u64 { 500 }
+fn default_smart_excludes() -> Vec<String> {
+    vec!["package_caches".into(), "build_artifacts".into(), "caches_temp".into()]
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SmartExcludeCategory {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    pub icon: String,
+    pub patterns: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -71,7 +92,7 @@ fn open_state_db() -> Result<rusqlite::Connection, String> {
     Ok(conn)
 }
 
-fn should_exclude(name: &str, excludes: &[String]) -> bool {
+fn should_exclude(path: &std::path::Path, name: &str, excludes: &[String]) -> bool {
     // Hard-coded defaults
     const ALWAYS: &[&str] = &[
         "node_modules", ".git", "__pycache__", ".DS_Store",
@@ -80,16 +101,118 @@ fn should_exclude(name: &str, excludes: &[String]) -> bool {
     if ALWAYS.contains(&name) {
         return true;
     }
+
+    let home = dirs::home_dir().unwrap_or_default();
+    let path_str = path.to_string_lossy();
+
     for pattern in excludes {
+        // Absolute or home-relative prefix match
+        if pattern.starts_with('/') {
+            if path_str.starts_with(pattern.as_str()) {
+                return true;
+            }
+            continue;
+        }
+        if pattern.starts_with('~') {
+            let expanded = home.join(&pattern[2..]);
+            if path.starts_with(&expanded) {
+                return true;
+            }
+            continue;
+        }
+        // Glob extension match (*.ext)
         if pattern.starts_with('*') {
             if name.ends_with(&pattern[1..]) {
                 return true;
             }
-        } else if name == pattern.as_str() {
-            return true;
+            continue;
+        }
+        // Directory component match — checks any component in the path
+        if pattern.contains('/') {
+            // Relative sub-path — check if path contains it
+            if path_str.contains(pattern.as_str()) {
+                return true;
+            }
+        } else {
+            // Simple name — match any path component
+            for component in path.components() {
+                if component.as_os_str().to_string_lossy() == pattern.as_str() {
+                    return true;
+                }
+            }
         }
     }
     false
+}
+
+fn expand_smart_excludes(active_ids: &[String]) -> Vec<String> {
+    let cats = smart_exclude_categories();
+    let mut patterns: Vec<String> = Vec::new();
+    for cat in &cats {
+        if active_ids.contains(&cat.id) {
+            patterns.extend(cat.patterns.clone());
+        }
+    }
+    patterns
+}
+
+fn smart_exclude_categories() -> Vec<SmartExcludeCategory> {
+    vec![
+        SmartExcludeCategory {
+            id: "package_caches".into(),
+            label: "Package Caches".into(),
+            description: "node_modules, pip, cargo registry, gems, etc.".into(),
+            icon: "📦".into(),
+            patterns: vec![
+                "node_modules".into(), ".npm".into(), "__pycache__".into(),
+                "*.pyc".into(), ".cargo/registry".into(), ".cargo/git".into(),
+                ".rustup/toolchains".into(), "*.egg-info".into(), ".tox".into(),
+                "venv".into(), ".venv".into(), ".gradle".into(), ".m2".into(),
+            ],
+        },
+        SmartExcludeCategory {
+            id: "build_artifacts".into(),
+            label: "Build Artifacts".into(),
+            description: "Compiled output: target/, dist/, .next/, etc.".into(),
+            icon: "🔨".into(),
+            patterns: vec![
+                "target".into(), "dist".into(), "build".into(), ".next".into(),
+                "out".into(), ".nuxt".into(), ".output".into(), "*.class".into(),
+                ".cache".into(), ".parcel-cache".into(), ".turbo".into(),
+            ],
+        },
+        SmartExcludeCategory {
+            id: "games_apps".into(),
+            label: "Games & Large Apps".into(),
+            description: "Steam, Flatpak app data, Lutris, game files".into(),
+            icon: "🎮".into(),
+            patterns: vec![
+                ".steam".into(), "Steam".into(), ".local/share/Steam".into(),
+                ".var/app".into(), "snap".into(), "*.AppImage".into(),
+                ".local/share/lutris".into(), "Games".into(),
+                ".local/share/bottles".into(),
+            ],
+        },
+        SmartExcludeCategory {
+            id: "caches_temp".into(),
+            label: "Caches & Temp".into(),
+            description: "Browser caches, thumbnails, trash, temp files".into(),
+            icon: "🗑️".into(),
+            patterns: vec![
+                ".cache".into(), "Cache".into(), "Caches".into(),
+                ".Trash".into(), ".thumbnails".into(), "tmp".into(),
+                "Temp".into(), "*.tmp".into(), ".DS_Store".into(),
+                "thumbs.db".into(), ".local/share/recently-used.xbel".into(),
+            ],
+        },
+        SmartExcludeCategory {
+            id: "downloads".into(),
+            label: "Downloads Folder".into(),
+            description: "Skip ~/Downloads entirely".into(),
+            icon: "📥".into(),
+            patterns: vec!["Downloads".into()],
+        },
+    ]
 }
 
 fn checksum_file(path: &std::path::Path) -> Result<String, String> {
@@ -131,6 +254,30 @@ async fn get_hostname() -> String {
 }
 
 #[tauri::command]
+fn get_home_dir() -> String {
+    dirs::home_dir()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string()
+}
+
+#[tauri::command]
+fn get_smart_exclude_categories() -> Vec<SmartExcludeCategory> {
+    smart_exclude_categories()
+}
+
+#[tauri::command]
+async fn setup_autostart() -> Result<(), String> {
+    let home = dirs::home_dir().ok_or("Cannot find home directory")?;
+    let autostart_dir = home.join(".config").join("autostart");
+    tokio::fs::create_dir_all(&autostart_dir).await.map_err(|e| e.to_string())?;
+    let desktop_file = autostart_dir.join("dataserver-backup.desktop");
+    let content = "[Desktop Entry]\nType=Application\nName=DataServer Backup\nExec=/usr/bin/dataserver-backup\nHidden=false\nNoDisplay=false\nX-GNOME-Autostart-enabled=true\nComment=Automatically back up folders to DataServer\n";
+    tokio::fs::write(&desktop_file, content).await.map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 async fn test_connection(server_url: String, api_token: String) -> Result<String, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -160,7 +307,7 @@ async fn count_files(folders: Vec<String>, excludes: Vec<String>) -> Result<u64,
         for folder in &folders {
             for entry in WalkDir::new(folder)
                 .into_iter()
-                .filter_entry(|e| !should_exclude(&e.file_name().to_string_lossy(), &excludes))
+                .filter_entry(|e| !should_exclude(e.path(), &e.file_name().to_string_lossy(), &excludes))
                 .flatten()
             {
                 if entry.file_type().is_file() {
@@ -182,9 +329,15 @@ async fn sync_now(
     source_name: String,
     folders: Vec<String>,
     excludes: Vec<String>,
+    max_file_size_mb: u64,
+    smart_excludes: Vec<String>,
 ) -> Result<SyncResult, String> {
-    // Count total files first for progress reporting
-    let total = count_files(folders.clone(), excludes.clone()).await?;
+    // Merge custom excludes with smart exclude patterns
+    let mut all_excludes = excludes.clone();
+    all_excludes.extend(expand_smart_excludes(&smart_excludes));
+
+    let count_excludes = all_excludes.clone();
+    let total = count_files(folders.clone(), count_excludes).await?;
 
     tokio::task::spawn_blocking(move || {
         let db = open_state_db()?;
@@ -200,10 +353,10 @@ async fn sync_now(
         let mut current = 0u64;
 
         for folder in &folders {
-            let excl = excludes.clone();
+            let excl = all_excludes.clone();
             for entry in WalkDir::new(folder)
                 .into_iter()
-                .filter_entry(|e| !should_exclude(&e.file_name().to_string_lossy(), &excl))
+                .filter_entry(|e| !should_exclude(e.path(), &e.file_name().to_string_lossy(), &excl))
                 .flatten()
             {
                 if !entry.file_type().is_file() {
@@ -223,6 +376,16 @@ async fn sync_now(
                         errors,
                     },
                 );
+
+                // File size check
+                if max_file_size_mb > 0 {
+                    if let Ok(meta) = std::fs::metadata(path) {
+                        if meta.len() > max_file_size_mb * 1024 * 1024 {
+                            skipped += 1;
+                            continue;
+                        }
+                    }
+                }
 
                 // Checksum
                 let checksum = match checksum_file(path) {
@@ -307,7 +470,6 @@ fn chrono_now() -> String {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    // Format as ISO 8601 without external dep
     let (y, mo, d, h, mi, s) = secs_to_datetime(secs);
     format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, mo, d, h, mi, s)
 }
@@ -319,7 +481,6 @@ fn secs_to_datetime(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
     let total_h = total_min / 60;
     let h = total_h % 24;
     let total_days = total_h / 24;
-    // Approximate — good enough for a "synced_at" timestamp
     let y = 1970 + total_days / 365;
     let rem = total_days % 365;
     let mo = rem / 30 + 1;
@@ -336,6 +497,9 @@ pub fn run() {
             load_config,
             save_config,
             get_hostname,
+            get_home_dir,
+            get_smart_exclude_categories,
+            setup_autostart,
             test_connection,
             count_files,
             sync_now,

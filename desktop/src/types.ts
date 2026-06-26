@@ -11,6 +11,17 @@ export interface Config {
   excludes: string[];
   auto_sync_minutes: number;
   last_sync: string | null;
+  sync_on_startup: boolean;
+  max_file_size_mb: number;
+  smart_excludes: string[];
+}
+
+export interface SmartExcludeCategory {
+  id: string;
+  label: string;
+  description: string;
+  icon: string;
+  patterns: string[];
 }
 
 export interface SyncProgress {

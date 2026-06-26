@@ -6,6 +6,7 @@ import { Config, SyncProgress, SyncResult, SyncState } from "../types";
 import FolderRow from "../components/FolderRow";
 import SyncLog from "../components/SyncLog";
 import SettingsModal from "../components/SettingsModal";
+import SmartFilters from "../components/SmartFilters";
 
 interface Props {
   config: Config;
@@ -18,16 +19,24 @@ export default function MainPage({ config, onConfigChange }: Props) {
   const [result, setResult] = useState<SyncResult | null>(null);
   const [log, setLog] = useState<string[]>([]);
   const [showSettings, setShowSettings] = useState(false);
-  const [showExcludes, setShowExcludes] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
+  const [filterTab, setFilterTab] = useState<"smart" | "custom">("smart");
   const [newExclude, setNewExclude] = useState("");
   const [connected, setConnected] = useState<boolean | null>(null);
   const autoSyncRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const startupSyncDone = useRef(false);
 
   useEffect(() => {
-    // Check connection on mount
     invoke("test_connection", { serverUrl: config.server_url, apiToken: config.api_token })
       .then(() => setConnected(true))
       .catch(() => setConnected(false));
+
+    // Sync on startup (once, after a short delay)
+    if (config.sync_on_startup && !startupSyncDone.current) {
+      startupSyncDone.current = true;
+      const t = setTimeout(() => handleSync(), 2000);
+      return () => clearTimeout(t);
+    }
   }, [config.server_url, config.api_token]);
 
   // Auto-sync interval
@@ -64,6 +73,8 @@ export default function MainPage({ config, onConfigChange }: Props) {
         sourceName: config.source_name,
         folders: enabledFolders,
         excludes: config.excludes,
+        maxFileSizeMb: config.max_file_size_mb ?? 0,
+        smartExcludes: config.smart_excludes ?? [],
       });
       setResult(res);
       setSyncState("done");
@@ -87,6 +98,14 @@ export default function MainPage({ config, onConfigChange }: Props) {
     const path = typeof selected === "string" ? selected : selected;
     if (config.folders.some((f) => f.path === path)) return;
     const updated = { ...config, folders: [...config.folders, { path, enabled: true }] };
+    await invoke("save_config", { config: updated });
+    onConfigChange(updated);
+  }
+
+  async function handleAddHomeFolder() {
+    const home = await invoke<string>("get_home_dir");
+    if (!home || config.folders.some((f) => f.path === home)) return;
+    const updated = { ...config, folders: [...config.folders, { path: home, enabled: true }] };
     await invoke("save_config", { config: updated });
     onConfigChange(updated);
   }
@@ -121,6 +140,15 @@ export default function MainPage({ config, onConfigChange }: Props) {
     onConfigChange(updated);
   }
 
+  async function handleSmartExcludesChange(categories: string[]) {
+    const updated = { ...config, smart_excludes: categories };
+    await invoke("save_config", { config: updated });
+    onConfigChange(updated);
+  }
+
+  const maxSizeMb = config.max_file_size_mb ?? 0;
+  const smartExcludes = config.smart_excludes ?? [];
+
   return (
     <div className="flex flex-col h-screen bg-slate-900 overflow-hidden">
       {/* Header */}
@@ -133,7 +161,6 @@ export default function MainPage({ config, onConfigChange }: Props) {
         </div>
         <span className="font-semibold text-white text-sm flex-1">DataServer Backup</span>
 
-        {/* Connection status */}
         <div className="flex items-center gap-1.5 text-xs">
           <span className={`w-2 h-2 rounded-full ${connected === true ? "bg-green-500" : connected === false ? "bg-red-500" : "bg-slate-500"}`} />
           <span className="text-slate-400">{connected === true ? "Connected" : connected === false ? "Offline" : "…"}</span>
@@ -179,15 +206,27 @@ export default function MainPage({ config, onConfigChange }: Props) {
         <div className="flex-1 flex flex-col p-5 overflow-y-auto border-r border-slate-700/50 min-w-0">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-sm font-semibold text-white">Backup Folders</h2>
-            <button
-              onClick={handleAddFolder}
-              className="flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300 bg-blue-900/30 hover:bg-blue-900/50 px-3 py-1.5 rounded-lg transition-colors"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-              Add Folder
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleAddHomeFolder}
+                className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-200 bg-slate-700/50 hover:bg-slate-700 px-3 py-1.5 rounded-lg transition-colors"
+                title="Add your entire home folder"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+                </svg>
+                + Home
+              </button>
+              <button
+                onClick={handleAddFolder}
+                className="flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300 bg-blue-900/30 hover:bg-blue-900/50 px-3 py-1.5 rounded-lg transition-colors"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+                Add Folder
+              </button>
+            </div>
           </div>
 
           {config.folders.length === 0 ? (
@@ -199,7 +238,7 @@ export default function MainPage({ config, onConfigChange }: Props) {
                 </svg>
               </div>
               <p className="text-slate-400 text-sm">No folders added yet</p>
-              <p className="text-slate-600 text-xs mt-1">Click "Add Folder" to choose what to back up</p>
+              <p className="text-slate-600 text-xs mt-1">Click "+ Home" to back up everything, or "Add Folder" to pick specific folders</p>
             </div>
           ) : (
             <div className="space-y-2">
@@ -214,42 +253,83 @@ export default function MainPage({ config, onConfigChange }: Props) {
             </div>
           )}
 
-          {/* Excludes section */}
+          {/* Filters section */}
           <div className="mt-6">
             <button
-              onClick={() => setShowExcludes(!showExcludes)}
+              onClick={() => setShowFilters(!showFilters)}
               className="flex items-center gap-2 text-xs font-medium text-slate-400 hover:text-slate-200 transition-colors"
             >
-              <svg className={`w-3.5 h-3.5 transition-transform ${showExcludes ? "rotate-90" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg className={`w-3.5 h-3.5 transition-transform ${showFilters ? "rotate-90" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
               </svg>
-              Exclude patterns ({config.excludes.length})
+              Filters &amp; Excludes
+              {smartExcludes.length > 0 && (
+                <span className="bg-blue-600 text-white text-[10px] px-1.5 py-0.5 rounded-full">
+                  {smartExcludes.length} active
+                </span>
+              )}
             </button>
-            {showExcludes && (
-              <div className="mt-3 space-y-2">
-                {config.excludes.map((pat, idx) => (
-                  <div key={idx} className="flex items-center gap-2 px-3 py-2 bg-slate-800 rounded-lg border border-slate-700">
-                    <span className="flex-1 text-xs font-mono text-slate-300">{pat}</span>
-                    <button onClick={() => handleRemoveExclude(idx)} className="text-slate-500 hover:text-red-400 transition-colors">
-                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                    </button>
-                  </div>
-                ))}
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={newExclude}
-                    onChange={(e) => setNewExclude(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleAddExclude()}
-                    placeholder="e.g. *.log"
-                    className="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-xs focus:outline-none focus:border-blue-500"
-                  />
-                  <button onClick={handleAddExclude} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white text-xs rounded-lg transition-colors">
-                    Add
+
+            {showFilters && (
+              <div className="mt-3">
+                {/* Tab pills */}
+                <div className="flex gap-1 mb-3">
+                  <button
+                    onClick={() => setFilterTab("smart")}
+                    className={`text-xs px-3 py-1 rounded-full transition-colors ${
+                      filterTab === "smart"
+                        ? "bg-blue-600 text-white"
+                        : "bg-slate-700 text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    Smart Filters
+                  </button>
+                  <button
+                    onClick={() => setFilterTab("custom")}
+                    className={`text-xs px-3 py-1 rounded-full transition-colors ${
+                      filterTab === "custom"
+                        ? "bg-blue-600 text-white"
+                        : "bg-slate-700 text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    Custom Patterns {config.excludes.length > 0 && `(${config.excludes.length})`}
                   </button>
                 </div>
+
+                {filterTab === "smart" && (
+                  <SmartFilters
+                    activeCategories={smartExcludes}
+                    onChange={handleSmartExcludesChange}
+                  />
+                )}
+
+                {filterTab === "custom" && (
+                  <div className="space-y-2">
+                    {config.excludes.map((pat, idx) => (
+                      <div key={idx} className="flex items-center gap-2 px-3 py-2 bg-slate-800 rounded-lg border border-slate-700">
+                        <span className="flex-1 text-xs font-mono text-slate-300">{pat}</span>
+                        <button onClick={() => handleRemoveExclude(idx)} className="text-slate-500 hover:text-red-400 transition-colors">
+                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
+                    ))}
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={newExclude}
+                        onChange={(e) => setNewExclude(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && handleAddExclude()}
+                        placeholder="e.g. *.log or ~/Downloads"
+                        className="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-3 py-1.5 text-white text-xs focus:outline-none focus:border-blue-500"
+                      />
+                      <button onClick={handleAddExclude} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white text-xs rounded-lg transition-colors">
+                        Add
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -257,7 +337,10 @@ export default function MainPage({ config, onConfigChange }: Props) {
 
         {/* Right — Sync status */}
         <div className="w-72 flex-shrink-0 p-5 overflow-y-auto">
-          <h2 className="text-sm font-semibold text-white mb-4">Sync Status</h2>
+          <h2 className="text-sm font-semibold text-white mb-1">Sync Status</h2>
+          <p className="text-xs text-slate-500 mb-4">
+            {maxSizeMb > 0 ? `Max file size: ${maxSizeMb} MB` : "No file size limit"}
+          </p>
           <SyncLog
             state={syncState}
             progress={progress}
