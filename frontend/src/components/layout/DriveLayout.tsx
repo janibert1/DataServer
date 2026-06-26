@@ -2,7 +2,7 @@ import { useState, Fragment } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { Menu, Transition } from '@headlessui/react';
 import {
-  HardDrive, Users, Share2, Clock, Star, Trash2, Settings, Shield,
+  HardDrive, Users, Share2, Clock, Star, Trash2, Settings, Shield, Archive,
   Menu as MenuIcon, X, LogOut, ChevronDown, FolderOpen, Upload,
   LayoutGrid, Zap, Download
 } from 'lucide-react';
@@ -17,13 +17,14 @@ import { DriveOpsPanel } from '../files/DriveOpsPanel';
 import { UploadButton } from '../files/UploadDropzone';
 import { useLocation } from 'react-router-dom';
 
-const navItems = [
+const navItems: { to: string; icon: React.ElementType; label: string; accent?: string }[] = [
   { to: '/drive/my-drive', icon: HardDrive, label: 'My Drive' },
   { to: '/drive/shared-with-me', icon: Users, label: 'Shared with me' },
   { to: '/drive/shared-by-me', icon: Share2, label: 'Shared by me' },
   { to: '/drive/recent', icon: Clock, label: 'Recent' },
   { to: '/drive/starred', icon: Star, label: 'Starred' },
   { to: '/drive/downloads', icon: Download, label: 'Downloads' },
+  { to: '/drive/backup', icon: Archive, label: 'Backups', accent: 'amber' },
   { to: '/drive/trash', icon: Trash2, label: 'Trash' },
 ];
 
@@ -52,7 +53,7 @@ function Sidebar({ onClose }: { onClose?: () => void }) {
 
       {/* Navigation */}
       <nav className="flex-1 px-3 space-y-0.5 overflow-y-auto">
-        {navItems.map(({ to, icon: Icon, label }) => (
+        {navItems.map((item) => { const { to, icon: Icon, label } = item; return (
           <NavLink
             key={to}
             to={to}
@@ -61,19 +62,19 @@ function Sidebar({ onClose }: { onClose?: () => void }) {
               clsx(
                 'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
                 isActive
-                  ? 'bg-brand-50 text-brand-700'
+                  ? (item.accent === 'amber' ? 'bg-amber-50 text-amber-700' : 'bg-brand-50 text-brand-700')
                   : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
               )
             }
           >
             {({ isActive }) => (
               <>
-                <Icon className={clsx('w-4.5 h-4.5 flex-shrink-0', isActive ? 'text-brand-600' : 'text-slate-400')} />
+                <Icon className={clsx('w-4.5 h-4.5 flex-shrink-0', isActive ? (item.accent === 'amber' ? 'text-amber-600' : 'text-brand-600') : 'text-slate-400')} />
                 {label}
               </>
             )}
           </NavLink>
-        ))}
+        ); })}
       </nav>
 
       {/* Bottom section */}

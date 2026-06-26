@@ -13,6 +13,8 @@ import { pushRouter } from './push';
 import { downloadsRouter } from './downloads';
 import { jobsRouter } from './jobs';
 
+import { backupRouter } from './backup';
+
 export const router = Router();
 
 router.use('/auth', authRouter);
@@ -28,3 +30,4 @@ router.use('/sync', syncRouter);
 router.use('/push', pushRouter);
 router.use('/downloads', downloadsRouter);
 router.use('/jobs', jobsRouter);
+router.use('/backup', backupRouter);

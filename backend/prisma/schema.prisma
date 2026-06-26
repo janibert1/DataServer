@@ -222,6 +222,7 @@ model Folder {
   trashedAt   DateTime?
   color       String?
   description String?
+  isBackup    Boolean   @default(false)
   path        String
   depth       Int       @default(0)
   createdAt   DateTime  @default(now())
@@ -263,6 +264,8 @@ model File {
   isFlagged       Boolean    @default(false)
   description     String?
   tags            String[]   @default([])
+  isBackup        Boolean    @default(false)
+  backupSource    String?
   path            String
   downloadCount   Int        @default(0)
   createdAt       DateTime   @default(now())

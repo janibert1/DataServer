@@ -22,6 +22,7 @@ import { RecentPage } from './pages/drive/RecentPage';
 import { StarredPage } from './pages/drive/StarredPage';
 import { TrashPage } from './pages/drive/TrashPage';
 import { DownloadsPage } from './pages/drive/DownloadsPage';
+import { BackupPage } from './pages/drive/BackupPage';
 import { SettingsPage } from './pages/drive/SettingsPage';
 import { SecurityPage } from './pages/drive/SecurityPage';
 
@@ -92,6 +93,7 @@ function AppRoutes() {
         <Route path="starred" element={<StarredPage />} />
         <Route path="trash" element={<TrashPage />} />
         <Route path="downloads" element={<DownloadsPage />} />
+        <Route path="backup" element={<BackupPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="security" element={<SecurityPage />} />
       </Route>

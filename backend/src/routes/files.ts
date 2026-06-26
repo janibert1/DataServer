@@ -54,6 +54,7 @@ filesRouter.get('/', async (req: Request, res: Response) => {
   const where: any = {
     ownerId: user.id,
     isTrashed: false,
+    isBackup: false,
     status: { in: [FileStatus.ACTIVE, FileStatus.PROCESSING] },
   };
 

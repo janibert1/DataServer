@@ -33,6 +33,7 @@ foldersRouter.get('/', async (req: Request, res: Response) => {
   const where: any = {
     ownerId: user.id,
     isTrashed: false,
+    isBackup: false,
     deletedAt: null,
   };
 

@@ -65,6 +65,8 @@ export interface DriveFile {
   isFlagged: boolean;
   description: string | null;
   tags: string[];
+  isBackup?: boolean;
+  backupSource?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -81,6 +83,7 @@ export interface DriveFolder {
   description: string | null;
   isStarred: boolean;
   isTrashed: boolean;
+  isBackup?: boolean;
   trashedAt: string | null;
   fileCount: number;
   folderCount: number;
