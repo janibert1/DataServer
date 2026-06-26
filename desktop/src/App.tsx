@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Config } from "./types";
 import SetupPage from "./pages/SetupPage";
 import MainPage from "./pages/MainPage";
@@ -13,6 +14,15 @@ export default function App() {
       .then((cfg) => setConfig(cfg))
       .catch(console.error)
       .finally(() => setLoading(false));
+
+    // Hide to tray on close instead of quitting
+    const win = getCurrentWindow();
+    let unlisten: (() => void) | undefined;
+    win.onCloseRequested((event) => {
+      event.preventDefault();
+      win.hide();
+    }).then((fn) => { unlisten = fn; });
+    return () => { if (unlisten) unlisten(); };
   }, []);
 
   if (loading) {

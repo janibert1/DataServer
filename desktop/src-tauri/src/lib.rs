@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
+
 use walkdir::WalkDir;
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -23,14 +24,13 @@ pub struct Config {
     pub last_sync: Option<String>,
     #[serde(default = "default_true")]
     pub sync_on_startup: bool,
-    #[serde(default = "default_max_file_size")]
+    #[serde(default)]
     pub max_file_size_mb: u64,
     #[serde(default = "default_smart_excludes")]
     pub smart_excludes: Vec<String>,
 }
 
 fn default_true() -> bool { true }
-fn default_max_file_size() -> u64 { 500 }
 fn default_smart_excludes() -> Vec<String> {
     vec!["package_caches".into(), "build_artifacts".into(), "caches_temp".into()]
 }
@@ -75,6 +75,16 @@ fn state_db_path() -> PathBuf {
     config_dir().join("state.db")
 }
 
+// Read config synchronously (for background threads)
+fn read_config() -> Result<Config, String> {
+    let p = config_path();
+    if !p.exists() {
+        return Err("No config file".into());
+    }
+    let s = std::fs::read_to_string(&p).map_err(|e| e.to_string())?;
+    serde_json::from_str(&s).map_err(|e| e.to_string())
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 fn open_state_db() -> Result<rusqlite::Connection, String> {
@@ -93,7 +103,6 @@ fn open_state_db() -> Result<rusqlite::Connection, String> {
 }
 
 fn should_exclude(path: &std::path::Path, name: &str, excludes: &[String]) -> bool {
-    // Hard-coded defaults
     const ALWAYS: &[&str] = &[
         "node_modules", ".git", "__pycache__", ".DS_Store",
         "target", ".cargo", ".cache", "Thumbs.db",
@@ -106,7 +115,6 @@ fn should_exclude(path: &std::path::Path, name: &str, excludes: &[String]) -> bo
     let path_str = path.to_string_lossy();
 
     for pattern in excludes {
-        // Absolute or home-relative prefix match
         if pattern.starts_with('/') {
             if path_str.starts_with(pattern.as_str()) {
                 return true;
@@ -120,21 +128,17 @@ fn should_exclude(path: &std::path::Path, name: &str, excludes: &[String]) -> bo
             }
             continue;
         }
-        // Glob extension match (*.ext)
         if pattern.starts_with('*') {
             if name.ends_with(&pattern[1..]) {
                 return true;
             }
             continue;
         }
-        // Directory component match — checks any component in the path
         if pattern.contains('/') {
-            // Relative sub-path — check if path contains it
             if path_str.contains(pattern.as_str()) {
                 return true;
             }
         } else {
-            // Simple name — match any path component
             for component in path.components() {
                 if component.as_os_str().to_string_lossy() == pattern.as_str() {
                     return true;
@@ -220,6 +224,185 @@ fn checksum_file(path: &std::path::Path) -> Result<String, String> {
     let mut h = Sha256::new();
     h.update(&bytes);
     Ok(hex::encode(h.finalize()))
+}
+
+// ── Core sync logic ────────────────────────────────────────────────────────
+
+async fn do_sync(
+    app: tauri::AppHandle,
+    server_url: String,
+    api_token: String,
+    source_name: String,
+    folders: Vec<String>,
+    all_excludes: Vec<String>,
+    max_file_size_mb: u64,
+) -> Result<SyncResult, String> {
+    let count_excludes = all_excludes.clone();
+    let count_folders = folders.clone();
+    let total: u64 = tokio::task::spawn_blocking(move || {
+        let mut t = 0u64;
+        for folder in &count_folders {
+            for entry in WalkDir::new(folder)
+                .into_iter()
+                .filter_entry(|e| !should_exclude(e.path(), &e.file_name().to_string_lossy(), &count_excludes))
+                .flatten()
+            {
+                if entry.file_type().is_file() { t += 1; }
+            }
+        }
+        t
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    tokio::task::spawn_blocking(move || {
+        let db = open_state_db()?;
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .map_err(|e| e.to_string())?;
+
+        let upload_url = format!("{}/api/backup/upload", server_url.trim_end_matches('/'));
+        let mut uploaded = 0u64;
+        let mut skipped = 0u64;
+        let mut errors = 0u64;
+        let mut current = 0u64;
+
+        for folder in &folders {
+            let excl = all_excludes.clone();
+            for entry in WalkDir::new(folder)
+                .into_iter()
+                .filter_entry(|e| !should_exclude(e.path(), &e.file_name().to_string_lossy(), &excl))
+                .flatten()
+            {
+                if !entry.file_type().is_file() { continue; }
+
+                let path = entry.path();
+                let path_str = path.to_string_lossy().to_string();
+                current += 1;
+
+                let _ = app.emit(
+                    "sync-progress",
+                    SyncProgress { current, total, current_file: path_str.clone(), errors },
+                );
+
+                if max_file_size_mb > 0 {
+                    if let Ok(meta) = std::fs::metadata(path) {
+                        if meta.len() > max_file_size_mb * 1024 * 1024 {
+                            skipped += 1;
+                            continue;
+                        }
+                    }
+                }
+
+                let checksum = match checksum_file(path) {
+                    Ok(c) => c,
+                    Err(_) => { errors += 1; continue; }
+                };
+
+                let existing: Option<String> = db
+                    .query_row(
+                        "SELECT checksum FROM synced_files WHERE path = ?1",
+                        rusqlite::params![&path_str],
+                        |row| row.get(0),
+                    )
+                    .ok();
+
+                if existing.as_deref() == Some(&checksum) {
+                    skipped += 1;
+                    continue;
+                }
+
+                let bytes = match std::fs::read(path) {
+                    Ok(b) => b,
+                    Err(_) => { errors += 1; continue; }
+                };
+
+                let file_name = entry.file_name().to_string_lossy().to_string();
+                let part = match reqwest::blocking::multipart::Part::bytes(bytes)
+                    .file_name(file_name)
+                    .mime_str("application/octet-stream")
+                {
+                    Ok(p) => p,
+                    Err(_) => { errors += 1; continue; }
+                };
+
+                let form = reqwest::blocking::multipart::Form::new()
+                    .part("file", part)
+                    .text("remotePath", path_str.clone())
+                    .text("source", source_name.clone());
+
+                match client
+                    .post(&upload_url)
+                    .header("Authorization", format!("Bearer {}", api_token))
+                    .multipart(form)
+                    .send()
+                {
+                    Ok(resp) if resp.status().is_success() => {
+                        let now = chrono_now();
+                        let _ = db.execute(
+                            "INSERT OR REPLACE INTO synced_files (path, checksum, synced_at) \
+                             VALUES (?1, ?2, ?3)",
+                            rusqlite::params![&path_str, &checksum, &now],
+                        );
+                        uploaded += 1;
+                    }
+                    _ => { errors += 1; }
+                }
+            }
+        }
+
+        Ok(SyncResult { uploaded, skipped, errors })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+// Background sync loop — runs as a tokio task from setup
+fn start_background_sync(app: tauri::AppHandle) {
+    tokio::spawn(async move {
+        // Wait 30s after startup before first sync
+        tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+        loop {
+            let config = match read_config() {
+                Ok(c) => c,
+                Err(_) => {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+                    continue;
+                }
+            };
+            if config.sync_on_startup && config.auto_sync_minutes > 0 {
+                let enabled: Vec<String> = config.folders.iter()
+                    .filter(|f| f.enabled)
+                    .map(|f| f.path.clone())
+                    .collect();
+                if !enabled.is_empty() {
+                    let mut all_excl = config.excludes.clone();
+                    all_excl.extend(expand_smart_excludes(&config.smart_excludes));
+                    let _ = do_sync(
+                        app.clone(),
+                        config.server_url.clone(),
+                        config.api_token.clone(),
+                        config.source_name.clone(),
+                        enabled,
+                        all_excl,
+                        config.max_file_size_mb,
+                    ).await;
+                    // Save last_sync timestamp
+                    if let Ok(mut cfg) = read_config() {
+                        cfg.last_sync = Some(chrono_now());
+                        if let Ok(s) = serde_json::to_string_pretty(&cfg) {
+                            let _ = std::fs::write(config_path(), s);
+                        }
+                    }
+                }
+                let minutes = config.auto_sync_minutes;
+                tokio::time::sleep(tokio::time::Duration::from_secs(minutes as u64 * 60)).await;
+            } else {
+                tokio::time::sleep(tokio::time::Duration::from_secs(300)).await;
+            }
+        }
+    });
 }
 
 // ── Tauri commands ─────────────────────────────────────────────────────────
@@ -332,136 +515,9 @@ async fn sync_now(
     max_file_size_mb: u64,
     smart_excludes: Vec<String>,
 ) -> Result<SyncResult, String> {
-    // Merge custom excludes with smart exclude patterns
     let mut all_excludes = excludes.clone();
     all_excludes.extend(expand_smart_excludes(&smart_excludes));
-
-    let count_excludes = all_excludes.clone();
-    let total = count_files(folders.clone(), count_excludes).await?;
-
-    tokio::task::spawn_blocking(move || {
-        let db = open_state_db()?;
-        let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(120))
-            .build()
-            .map_err(|e| e.to_string())?;
-
-        let upload_url = format!("{}/api/backup/upload", server_url.trim_end_matches('/'));
-        let mut uploaded = 0u64;
-        let mut skipped = 0u64;
-        let mut errors = 0u64;
-        let mut current = 0u64;
-
-        for folder in &folders {
-            let excl = all_excludes.clone();
-            for entry in WalkDir::new(folder)
-                .into_iter()
-                .filter_entry(|e| !should_exclude(e.path(), &e.file_name().to_string_lossy(), &excl))
-                .flatten()
-            {
-                if !entry.file_type().is_file() {
-                    continue;
-                }
-
-                let path = entry.path();
-                let path_str = path.to_string_lossy().to_string();
-                current += 1;
-
-                let _ = app.emit(
-                    "sync-progress",
-                    SyncProgress {
-                        current,
-                        total,
-                        current_file: path_str.clone(),
-                        errors,
-                    },
-                );
-
-                // File size check
-                if max_file_size_mb > 0 {
-                    if let Ok(meta) = std::fs::metadata(path) {
-                        if meta.len() > max_file_size_mb * 1024 * 1024 {
-                            skipped += 1;
-                            continue;
-                        }
-                    }
-                }
-
-                // Checksum
-                let checksum = match checksum_file(path) {
-                    Ok(c) => c,
-                    Err(_) => {
-                        errors += 1;
-                        continue;
-                    }
-                };
-
-                // Check state db
-                let existing: Option<String> = db
-                    .query_row(
-                        "SELECT checksum FROM synced_files WHERE path = ?1",
-                        rusqlite::params![&path_str],
-                        |row| row.get(0),
-                    )
-                    .ok();
-
-                if existing.as_deref() == Some(&checksum) {
-                    skipped += 1;
-                    continue;
-                }
-
-                // Read & upload
-                let bytes = match std::fs::read(path) {
-                    Ok(b) => b,
-                    Err(_) => {
-                        errors += 1;
-                        continue;
-                    }
-                };
-
-                let file_name = entry.file_name().to_string_lossy().to_string();
-                let part = match reqwest::blocking::multipart::Part::bytes(bytes)
-                    .file_name(file_name)
-                    .mime_str("application/octet-stream")
-                {
-                    Ok(p) => p,
-                    Err(_) => {
-                        errors += 1;
-                        continue;
-                    }
-                };
-
-                let form = reqwest::blocking::multipart::Form::new()
-                    .part("file", part)
-                    .text("remotePath", path_str.clone())
-                    .text("source", source_name.clone());
-
-                match client
-                    .post(&upload_url)
-                    .header("Authorization", format!("Bearer {}", api_token))
-                    .multipart(form)
-                    .send()
-                {
-                    Ok(resp) if resp.status().is_success() => {
-                        let now = chrono_now();
-                        let _ = db.execute(
-                            "INSERT OR REPLACE INTO synced_files (path, checksum, synced_at) \
-                             VALUES (?1, ?2, ?3)",
-                            rusqlite::params![&path_str, &checksum, &now],
-                        );
-                        uploaded += 1;
-                    }
-                    _ => {
-                        errors += 1;
-                    }
-                }
-            }
-        }
-
-        Ok(SyncResult { uploaded, skipped, errors })
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    do_sync(app, server_url, api_token, source_name, folders, all_excludes, max_file_size_mb).await
 }
 
 fn chrono_now() -> String {
@@ -493,6 +549,81 @@ fn secs_to_datetime(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            // If config exists and is complete, start hidden + begin background sync
+            if let Ok(config) = read_config() {
+                if !config.server_url.is_empty() && !config.api_token.is_empty() {
+                    if let Some(win) = app.get_webview_window("main") {
+                        let _ = win.hide();
+                    }
+                    start_background_sync(app.handle().clone());
+                }
+            }
+
+            // System tray
+            use tauri::menu::{Menu, MenuItem};
+            use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+
+            let open = MenuItem::with_id(app, "open", "Open DataServer Backup", true, None::<&str>)?;
+            let sync = MenuItem::with_id(app, "sync", "Sync Now", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&open, &sync, &quit])?;
+
+            TrayIconBuilder::new()
+                .menu(&menu)
+                .tooltip("DataServer Backup")
+                .icon(app.default_window_icon().unwrap().clone())
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "open" => {
+                        if let Some(win) = app.get_webview_window("main") {
+                            let _ = win.show();
+                            let _ = win.set_focus();
+                        }
+                    }
+                    "sync" => {
+                        if let Ok(config) = read_config() {
+                            let app2 = app.clone();
+                            let enabled: Vec<String> = config.folders.iter()
+                                .filter(|f| f.enabled)
+                                .map(|f| f.path.clone())
+                                .collect();
+                            if !enabled.is_empty() {
+                                let mut all_excl = config.excludes.clone();
+                                all_excl.extend(expand_smart_excludes(&config.smart_excludes));
+                                tokio::spawn(async move {
+                                    let _ = do_sync(
+                                        app2,
+                                        config.server_url,
+                                        config.api_token,
+                                        config.source_name,
+                                        enabled,
+                                        all_excl,
+                                        config.max_file_size_mb,
+                                    ).await;
+                                });
+                            }
+                        }
+                    }
+                    "quit" => { app.exit(0); }
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event {
+                        let app = tray.app_handle();
+                        if let Some(win) = app.get_webview_window("main") {
+                            let _ = win.show();
+                            let _ = win.set_focus();
+                        }
+                    }
+                })
+                .build(app)?;
+
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             load_config,
             save_config,

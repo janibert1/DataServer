@@ -24,19 +24,11 @@ export default function MainPage({ config, onConfigChange }: Props) {
   const [newExclude, setNewExclude] = useState("");
   const [connected, setConnected] = useState<boolean | null>(null);
   const autoSyncRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const startupSyncDone = useRef(false);
 
   useEffect(() => {
     invoke("test_connection", { serverUrl: config.server_url, apiToken: config.api_token })
       .then(() => setConnected(true))
       .catch(() => setConnected(false));
-
-    // Sync on startup (once, after a short delay)
-    if (config.sync_on_startup && !startupSyncDone.current) {
-      startupSyncDone.current = true;
-      const t = setTimeout(() => handleSync(), 2000);
-      return () => clearTimeout(t);
-    }
   }, [config.server_url, config.api_token]);
 
   // Auto-sync interval
@@ -338,9 +330,9 @@ export default function MainPage({ config, onConfigChange }: Props) {
         {/* Right — Sync status */}
         <div className="w-72 flex-shrink-0 p-5 overflow-y-auto">
           <h2 className="text-sm font-semibold text-white mb-1">Sync Status</h2>
-          <p className="text-xs text-slate-500 mb-4">
-            {maxSizeMb > 0 ? `Max file size: ${maxSizeMb} MB` : "No file size limit"}
-          </p>
+          {maxSizeMb > 0 && (
+            <p className="text-xs text-slate-500 mb-4">Max file size: {maxSizeMb} MB</p>
+          )}
           <SyncLog
             state={syncState}
             progress={progress}
