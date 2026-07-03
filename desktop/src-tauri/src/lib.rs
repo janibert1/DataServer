@@ -59,6 +59,20 @@ pub struct SyncResult {
     pub errors: u64,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeviceAuthUser {
+    pub email: String,
+    #[serde(rename = "displayName")]
+    pub display_name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeviceAuthPollResult {
+    pub status: String,
+    pub token: Option<String>,
+    pub user: Option<DeviceAuthUser>,
+}
+
 // ── Paths ──────────────────────────────────────────────────────────────────
 
 fn config_dir() -> PathBuf {
@@ -484,6 +498,33 @@ async fn test_connection(server_url: String, api_token: String) -> Result<String
 }
 
 #[tauri::command]
+async fn poll_device_auth(server_url: String, code: String) -> Result<DeviceAuthPollResult, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let url = format!(
+        "{}/api/tokens/device/{}/poll",
+        server_url.trim_end_matches('/'),
+        code
+    );
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Connection failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Server returned {}", resp.status().as_u16()));
+    }
+
+    resp.json::<DeviceAuthPollResult>()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn count_files(folders: Vec<String>, excludes: Vec<String>) -> Result<u64, String> {
     tokio::task::spawn_blocking(move || {
         let mut total = 0u64;
@@ -549,6 +590,7 @@ fn secs_to_datetime(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             // If config exists and is complete, start hidden + begin background sync
             if let Ok(config) = read_config() {
@@ -632,6 +674,7 @@ pub fn run() {
             get_smart_exclude_categories,
             setup_autostart,
             test_connection,
+            poll_device_auth,
             count_files,
             sync_now,
         ])

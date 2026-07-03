@@ -2,7 +2,7 @@ import { useState, Fragment } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Shield, Key, Smartphone, Monitor, Globe, AlertTriangle,
-  CheckCircle, Clock, Trash2, Eye, EyeOff, QrCode
+  CheckCircle, Clock, Trash2, Eye, EyeOff, QrCode, Copy, Terminal
 } from 'lucide-react';
 import { formatDistanceToNow, format } from 'date-fns';
 import clsx from 'clsx';
@@ -56,6 +56,47 @@ function useSecurityEvents() {
         details: Record<string, unknown> | null;
       }[];
     },
+  });
+}
+
+function useApiTokens() {
+  return useQuery({
+    queryKey: ['account', 'api-tokens'],
+    queryFn: async () => {
+      const res = await api.get('/tokens');
+      return res.data.tokens as {
+        id: string;
+        name: string;
+        tokenPrefix: string;
+        lastUsedAt: string | null;
+        lastUsedIp: string | null;
+        expiresAt: string | null;
+        createdAt: string;
+      }[];
+    },
+  });
+}
+
+function useCreateApiToken() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) => api.post('/tokens', { name }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['account', 'api-tokens'] });
+    },
+    onError: (err) => toast.error(getErrorMessage(err)),
+  });
+}
+
+function useRevokeApiToken() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/tokens/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['account', 'api-tokens'] });
+      toast.success('Token revoked.');
+    },
+    onError: (err) => toast.error(getErrorMessage(err)),
   });
 }
 
@@ -343,6 +384,143 @@ function TwoFactorSection() {
   );
 }
 
+// ── API Tokens Section ──────────────────────────────────────────────────────────
+function ApiTokensSection() {
+  const { data: tokens, isLoading } = useApiTokens();
+  const createToken = useCreateApiToken();
+  const revokeToken = useRevokeApiToken();
+  const [showCreate, setShowCreate] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [mintedToken, setMintedToken] = useState<string | null>(null);
+  const [revokeTarget, setRevokeTarget] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const handleCreate = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newName.trim()) return;
+    createToken.mutate(newName.trim(), {
+      onSuccess: (res) => {
+        setMintedToken(res.data.token);
+        setNewName('');
+        setShowCreate(false);
+      },
+    });
+  };
+
+  const handleCopy = () => {
+    if (!mintedToken) return;
+    navigator.clipboard.writeText(mintedToken);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Freshly minted token — shown once */}
+      {mintedToken && (
+        <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl space-y-2">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-600" />
+            <p className="text-sm font-medium text-amber-800">Copy this token now — it won't be shown again</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 text-sm font-mono bg-white border border-amber-200 rounded-lg px-3 py-2 break-all">
+              {mintedToken}
+            </code>
+            <button
+              onClick={handleCopy}
+              className="flex-shrink-0 flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-amber-800 bg-white border border-amber-300 rounded-lg hover:bg-amber-100 transition-colors"
+            >
+              <Copy className="w-4 h-4" />
+              {copied ? 'Copied!' : 'Copy'}
+            </button>
+          </div>
+          <div className="flex justify-end">
+            <button onClick={() => setMintedToken(null)} className="text-xs font-medium text-amber-700 hover:text-amber-900">
+              Done
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Create form */}
+      {showCreate ? (
+        <form onSubmit={handleCreate} className="flex items-center gap-2">
+          <input
+            type="text"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            placeholder="e.g. jan-fedora backup"
+            className="flex-1 px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-300 focus:border-brand-400"
+            autoFocus
+            required
+          />
+          <button type="submit" disabled={createToken.isPending || !newName.trim()}
+            className="px-4 py-2 text-sm font-medium text-white bg-brand-600 rounded-lg hover:bg-brand-700 disabled:opacity-50 transition-colors">
+            {createToken.isPending ? 'Creating…' : 'Create'}
+          </button>
+          <button type="button" onClick={() => { setShowCreate(false); setNewName(''); }}
+            className="px-3 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors">
+            Cancel
+          </button>
+        </form>
+      ) : (
+        <button
+          onClick={() => setShowCreate(true)}
+          className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-brand-600 rounded-lg hover:bg-brand-700 transition-colors"
+        >
+          <Terminal className="w-4 h-4" />
+          Create new token
+        </button>
+      )}
+
+      {/* Token list */}
+      {isLoading ? (
+        <div className="flex justify-center py-6"><LoadingSpinner /></div>
+      ) : !tokens || tokens.length === 0 ? (
+        <p className="text-sm text-slate-500">No API tokens yet. Create one to connect the desktop or CLI client.</p>
+      ) : (
+        <div className="space-y-3">
+          {tokens.map((token) => (
+            <div key={token.id} className="flex items-start gap-3 p-4 rounded-xl border bg-slate-50 border-slate-200">
+              <Terminal className="w-5 h-5 flex-shrink-0 mt-0.5 text-slate-400" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-slate-800 truncate">{token.name}</p>
+                <p className="text-xs text-slate-500 mt-0.5 font-mono">{token.tokenPrefix}…</p>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Created {formatDistanceToNow(new Date(token.createdAt), { addSuffix: true })}
+                  {token.lastUsedAt && ` · Last used ${formatDistanceToNow(new Date(token.lastUsedAt), { addSuffix: true })}`}
+                </p>
+              </div>
+              <button
+                onClick={() => setRevokeTarget(token.id)}
+                className="flex-shrink-0 px-2.5 py-1.5 text-xs font-medium text-red-600 bg-white border border-red-200 rounded-lg hover:bg-red-50 transition-colors"
+              >
+                Revoke
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={!!revokeTarget}
+        onClose={() => setRevokeTarget(null)}
+        onConfirm={() => {
+          if (revokeTarget) {
+            revokeToken.mutate(revokeTarget, { onSuccess: () => setRevokeTarget(null) });
+          }
+        }}
+        title="Revoke this token?"
+        description="Any app using this token will immediately lose access."
+        confirmLabel="Revoke token"
+        variant="danger"
+        isLoading={revokeToken.isPending}
+      />
+    </div>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export function SecurityPage() {
   const { data: sessions, isLoading: sessionsLoading } = useSessions();
@@ -417,6 +595,11 @@ export function SecurityPage() {
             ))}
           </div>
         )}
+      </Section>
+
+      {/* API Tokens */}
+      <Section title="API Tokens" description="Tokens let apps like the DataServer desktop client access your account without your password">
+        <ApiTokensSection />
       </Section>
 
       {/* Security events */}
