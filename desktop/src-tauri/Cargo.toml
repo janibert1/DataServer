@@ -1,6 +1,6 @@
 [package]
 name = "dataserver-backup"
-version = "1.0.0"
+version = "1.3.2"
 description = "DataServer Backup Client"
 authors = ["jan"]
 edition = "2021"
