@@ -464,6 +464,79 @@ fn get_smart_exclude_categories() -> Vec<SmartExcludeCategory> {
 }
 
 #[tauri::command]
+fn get_platform() -> String {
+    std::env::consts::OS.to_string()
+}
+
+// macOS gates access to a handful of user-data folders (Desktop, Documents,
+// Downloads, Photos, Mail, etc.) behind per-folder TCC prompts the first time
+// a non-sandboxed app touches each one — there is no API to request them all
+// at once. The only "ask once" option is Full Disk Access, which is a manual
+// grant in System Settings, not something an app can pop a dialog for.
+// We detect whether it's already been granted by probing a couple of files
+// that macOS specifically protects even for the owning user; without Full
+// Disk Access these return "Operation not permitted" (EPERM) rather than a
+// normal not-found/denied error, whether or not the file actually exists.
+#[cfg(target_os = "macos")]
+fn full_disk_access_canaries() -> Vec<PathBuf> {
+    let home = dirs::home_dir().unwrap_or_default();
+    vec![
+        // Safari always creates this on a fresh account even if never opened,
+        // and (unlike Desktop/Documents/Downloads) it has no incremental
+        // auto-prompt — it's gated behind Full Disk Access exclusively.
+        home.join("Library/Safari/CloudTabs.db"),
+        home.join("Library/Mail/V10/MailData/Envelope Index"),
+    ]
+}
+
+#[cfg(target_os = "macos")]
+fn is_tcc_denied(err: &std::io::Error) -> bool {
+    // EPERM specifically (not ENOENT/"NotFound") is macOS's signal that TCC
+    // is blocking the read, as opposed to the file genuinely not existing.
+    err.raw_os_error() == Some(libc_eperm())
+}
+
+#[cfg(target_os = "macos")]
+fn libc_eperm() -> i32 {
+    1 // EPERM is 1 on Darwin (and Linux)
+}
+
+#[tauri::command]
+fn check_full_disk_access() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        for path in full_disk_access_canaries() {
+            match std::fs::metadata(&path) {
+                Ok(_) => continue,
+                Err(e) if is_tcc_denied(&e) => return false,
+                Err(_) => continue, // genuinely missing — not a TCC signal
+            }
+        }
+        true
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
+}
+
+#[tauri::command]
+fn open_full_disk_access_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("Full Disk Access settings are only applicable on macOS".to_string())
+    }
+}
+
+#[tauri::command]
 async fn setup_autostart() -> Result<(), String> {
     let home = dirs::home_dir().ok_or("Cannot find home directory")?;
     let autostart_dir = home.join(".config").join("autostart");
@@ -671,6 +744,9 @@ pub fn run() {
             save_config,
             get_hostname,
             get_home_dir,
+            get_platform,
+            check_full_disk_access,
+            open_full_disk_access_settings,
             get_smart_exclude_categories,
             setup_autostart,
             test_connection,

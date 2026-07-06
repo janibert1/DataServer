@@ -7,6 +7,7 @@ import FolderRow from "../components/FolderRow";
 import SyncLog from "../components/SyncLog";
 import SettingsModal from "../components/SettingsModal";
 import SmartFilters from "../components/SmartFilters";
+import FullDiskAccessModal from "../components/FullDiskAccessModal";
 
 interface Props {
   config: Config;
@@ -23,6 +24,10 @@ export default function MainPage({ config, onConfigChange }: Props) {
   const [filterTab, setFilterTab] = useState<"smart" | "custom">("smart");
   const [newExclude, setNewExclude] = useState("");
   const [connected, setConnected] = useState<boolean | null>(null);
+  const [isMac, setIsMac] = useState(false);
+  const [fullDiskAccess, setFullDiskAccess] = useState(true);
+  const [showFdaModal, setShowFdaModal] = useState(false);
+  const [fdaIntent, setFdaIntent] = useState<"home" | "sync" | null>(null);
   const autoSyncRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -30,6 +35,16 @@ export default function MainPage({ config, onConfigChange }: Props) {
       .then(() => setConnected(true))
       .catch(() => setConnected(false));
   }, [config.server_url, config.api_token]);
+
+  // Full Disk Access is a macOS-only concept — on other platforms this is a no-op
+  useEffect(() => {
+    invoke<string>("get_platform").then(async (platform) => {
+      if (platform !== "macos") return;
+      setIsMac(true);
+      const granted = await invoke<boolean>("check_full_disk_access").catch(() => true);
+      setFullDiskAccess(granted);
+    });
+  }, []);
 
   // Auto-sync interval
   useEffect(() => {
@@ -42,6 +57,11 @@ export default function MainPage({ config, onConfigChange }: Props) {
 
   async function handleSync() {
     if (syncState === "syncing") return;
+    if (isMac && !fullDiskAccess) {
+      setFdaIntent("sync");
+      setShowFdaModal(true);
+      return;
+    }
     setSyncState("syncing");
     setProgress(null);
     setResult(null);
@@ -95,11 +115,25 @@ export default function MainPage({ config, onConfigChange }: Props) {
   }
 
   async function handleAddHomeFolder() {
+    if (isMac && !fullDiskAccess) {
+      setFdaIntent("home");
+      setShowFdaModal(true);
+      return;
+    }
     const home = await invoke<string>("get_home_dir");
     if (!home || config.folders.some((f) => f.path === home)) return;
     const updated = { ...config, folders: [...config.folders, { path: home, enabled: true }] };
     await invoke("save_config", { config: updated });
     onConfigChange(updated);
+  }
+
+  async function handleFdaGranted() {
+    setFullDiskAccess(true);
+    setShowFdaModal(false);
+    const intent = fdaIntent;
+    setFdaIntent(null);
+    if (intent === "home") await handleAddHomeFolder();
+    else if (intent === "sync") await handleSync();
   }
 
   async function handleToggleFolder(idx: number) {
@@ -157,6 +191,16 @@ export default function MainPage({ config, onConfigChange }: Props) {
           <span className={`w-2 h-2 rounded-full ${connected === true ? "bg-green-500" : connected === false ? "bg-red-500" : "bg-slate-500"}`} />
           <span className="text-slate-400">{connected === true ? "Connected" : connected === false ? "Offline" : "…"}</span>
         </div>
+
+        {isMac && !fullDiskAccess && (
+          <button
+            onClick={() => { setFdaIntent(null); setShowFdaModal(true); }}
+            className="flex items-center gap-1.5 text-xs text-amber-400 hover:text-amber-300 bg-amber-900/30 hover:bg-amber-900/50 px-3 py-1.5 rounded-lg transition-colors"
+            title="Grant Full Disk Access once to avoid repeated per-folder permission prompts"
+          >
+            ⚠ Grant Full Disk Access
+          </button>
+        )}
 
         <button
           onClick={() => setShowSettings(true)}
@@ -348,6 +392,13 @@ export default function MainPage({ config, onConfigChange }: Props) {
           config={config}
           onSave={(updated) => { onConfigChange(updated); setShowSettings(false); }}
           onClose={() => setShowSettings(false)}
+        />
+      )}
+
+      {showFdaModal && (
+        <FullDiskAccessModal
+          onGranted={handleFdaGranted}
+          onClose={() => { setShowFdaModal(false); setFdaIntent(null); }}
         />
       )}
     </div>
