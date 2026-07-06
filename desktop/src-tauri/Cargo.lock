@@ -674,7 +674,7 @@ dependencies = [
 
 [[package]]
 name = "dataserver-backup"
-version = "1.3.2"
+version = "1.3.3"
 dependencies = [
  "dirs 5.0.1",
  "hex",
