@@ -374,7 +374,7 @@ async fn do_sync(
 
 // Background sync loop — runs as a tokio task from setup
 fn start_background_sync(app: tauri::AppHandle) {
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         // Wait 30s after startup before first sync
         tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
         loop {
@@ -708,7 +708,7 @@ pub fn run() {
                             if !enabled.is_empty() {
                                 let mut all_excl = config.excludes.clone();
                                 all_excl.extend(expand_smart_excludes(&config.smart_excludes));
-                                tokio::spawn(async move {
+                                tauri::async_runtime::spawn(async move {
                                     let _ = do_sync(
                                         app2,
                                         config.server_url,

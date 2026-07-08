@@ -1,6 +1,6 @@
 {
   "productName": "DataServer Backup",
-  "version": "1.3.6",
+  "version": "1.3.7",
   "identifier": "nl.jdries.dataserver-backup",
   "build": {
     "frontendDist": "../dist",
