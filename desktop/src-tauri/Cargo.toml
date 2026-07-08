@@ -1,6 +1,6 @@
 [package]
 name = "dataserver-backup"
-version = "1.3.3"
+version = "1.3.5"
 description = "DataServer Backup Client"
 authors = ["jan"]
 edition = "2021"
@@ -16,6 +16,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
