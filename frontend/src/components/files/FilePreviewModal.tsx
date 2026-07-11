@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect } from 'react';
+import { Fragment, useState, useEffect, useRef } from 'react';
 import { Dialog, Transition } from '@headlessui/react';
 import { X, Download, ChevronLeft, ChevronRight, ExternalLink, Info } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
@@ -19,6 +19,36 @@ interface Props {
 }
 
 
+// A plain <video src={previewUrl}> relies on the browser noticing the src
+// attribute changed and kicking off its media load algorithm on its own.
+// In practice (confirmed live: zero 'loadstart' events, zero resource-timing
+// entries for the video, readyState stuck at HAVE_NOTHING indefinitely,
+// despite a valid currentSrc) that notice-and-reload behavior is not
+// reliable across renders in this app -- the browser never actually
+// requests the media. Explicitly calling videoEl.load() forces the load
+// algorithm to run regardless of whether the browser detected the src
+// mutation on its own; this is the standard fix for this exact class of
+// "React <video> never starts loading" symptom.
+function VideoPlayer({ previewUrl }: { previewUrl: string }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    videoRef.current?.load();
+  }, [previewUrl]);
+
+  return (
+    <video
+      ref={videoRef}
+      src={previewUrl}
+      controls
+      className="max-w-full rounded-lg bg-black"
+      style={{ maxHeight: 'calc(85vh - 120px)' }}
+    >
+      Your browser does not support video playback.
+    </video>
+  );
+}
+
 function PreviewContent({ file, previewUrl }: { file: DriveFile; previewUrl: string }) {
   const { mimeType } = file;
 
@@ -34,16 +64,7 @@ function PreviewContent({ file, previewUrl }: { file: DriveFile; previewUrl: str
   }
 
   if (mimeType.startsWith('video/')) {
-    return (
-      <video
-        src={previewUrl}
-        controls
-        className="max-w-full rounded-lg bg-black"
-        style={{ maxHeight: 'calc(85vh - 120px)' }}
-      >
-        Your browser does not support video playback.
-      </video>
-    );
+    return <VideoPlayer previewUrl={previewUrl} />;
   }
 
   if (mimeType.startsWith('audio/')) {
