@@ -116,6 +116,10 @@ export const previewWorker = new Worker<PreviewJobData>(
   {
     connection: { url: config.redis.url },
     concurrency: 3,
+    // Caps thumbnail generation at ~5/sec regardless of how many jobs are
+    // queued -- protects live traffic from a large backfill (or a bulk
+    // upload) saturating CPU/S3 with image-processing work.
+    limiter: { max: 5, duration: 1000 },
   }
 );
 
