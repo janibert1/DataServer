@@ -94,11 +94,16 @@ async function processPreviewJob(job: Job<PreviewJobData>): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
     logger.error('Preview job failed', { fileId, error: message });
 
-    // Mark file as PROCESSING so an operator can investigate;
-    // using UPLOADING signals it is not ready and avoids a non-existent enum value.
+    // The file itself is already fully uploaded and ACTIVE by the time this
+    // job runs (the upload route sets that before enqueueing) -- a thumbnail
+    // failure (e.g. an unsupported codec like HEIC without libheif) should
+    // never downgrade a working file's status. Previously this set status to
+    // PROCESSING unconditionally, which meant any file whose thumbnail job
+    // failed permanently (after BullMQ exhausts retries) was left looking
+    // stuck/uploading forever, even though the file was perfectly usable.
     await prisma.file.update({
       where: { id: fileId },
-      data: { status: 'PROCESSING' },
+      data: { status: 'ACTIVE' },
     }).catch((dbErr) => {
       logger.error('Preview job: failed to update file status after error', {
         fileId,
