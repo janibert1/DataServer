@@ -1,4 +1,9 @@
 import { Worker, Job } from 'bullmq';
+import { spawn } from 'child_process';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { pipeline } from 'stream/promises';
 import { config } from '../config';
 import { prisma } from '../lib/prisma';
 import { uploadToS3 } from '../lib/s3';
@@ -7,6 +12,52 @@ import { logger } from '../lib/logger';
 
 export interface PreviewJobData {
   fileId: string;
+}
+
+// Remuxes any video into a standard ISO-BMFF MP4 container (moov-before-mdat,
+// i.e. "faststart") for the *preview* stream. Two real-world containers cause
+// silent, errorless playback failure in Chromium even when the codec inside
+// is one Chrome fully supports: (1) the moov atom trailing at EOF instead of
+// up front, and (2) QuickTime's own ftyp brand ("qt  ") -- Chromium's demuxer
+// won't reliably read either even though Safari/AVFoundation handles both
+// fine. `-c copy` is a pure container rewrite (no re-encode), so this is fast
+// and lossless for the already-compatible-codec case; incompatible codecs
+// (e.g. HEVC, ProRes) aren't fixed by this and will still fail to play --
+// that's a separate, unaddressed problem.
+async function remuxVideoPreview(fileId: string, storageKey: string): Promise<string> {
+  const tmpDir = os.tmpdir();
+  const srcPath = path.join(tmpDir, `preview-src-${fileId}`);
+  const outPath = path.join(tmpDir, `preview-out-${fileId}.mp4`);
+
+  try {
+    const sourceStream = await getObjectStream(storageKey);
+    await pipeline(sourceStream, fs.createWriteStream(srcPath));
+
+    await new Promise<void>((resolve, reject) => {
+      const ff = spawn('ffmpeg', [
+        '-y',
+        '-i', srcPath,
+        '-c', 'copy',
+        '-movflags', '+faststart',
+        '-f', 'mp4',
+        outPath,
+      ]);
+      let stderr = '';
+      ff.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+      ff.on('error', reject);
+      ff.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`ffmpeg exited with code ${code}: ${stderr.slice(-2000)}`));
+      });
+    });
+
+    const previewKey = `previews/${fileId}.mp4`;
+    await uploadToS3(previewKey, fs.createReadStream(outPath), 'video/mp4');
+    return previewKey;
+  } finally {
+    await fs.promises.rm(srcPath, { force: true });
+    await fs.promises.rm(outPath, { force: true });
+  }
 }
 
 async function processPreviewJob(job: Job<PreviewJobData>): Promise<void> {
@@ -83,7 +134,22 @@ async function processPreviewJob(job: Job<PreviewJobData>): Promise<void> {
       }
     }
 
-    // Non-image files (or sharp unavailable): just mark as ACTIVE
+    if (file.mimeType.startsWith('video/')) {
+      const previewKey = await remuxVideoPreview(fileId, file.storageKey);
+
+      await prisma.file.update({
+        where: { id: fileId },
+        data: {
+          previewKey,
+          status: 'ACTIVE',
+        },
+      });
+
+      logger.info('Preview job: video remuxed to MP4 and uploaded', { fileId, previewKey });
+      return;
+    }
+
+    // Other file types: just mark as ACTIVE
     await prisma.file.update({
       where: { id: fileId },
       data: { status: 'ACTIVE' },
