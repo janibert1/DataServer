@@ -508,7 +508,7 @@ filesRouter.get('/:id/preview', async (req: Request, res: Response) => {
 
   const file = await prisma.file.findUnique({
     where: { id },
-    select: { storageKey: true, thumbnailKey: true, previewKey: true, status: true, ownerId: true, folderId: true, mimeType: true },
+    select: { name: true, storageKey: true, thumbnailKey: true, previewKey: true, status: true, ownerId: true, folderId: true, mimeType: true },
   });
 
   if (!file || file.status === FileStatus.DELETED) {
@@ -523,11 +523,18 @@ filesRouter.get('/:id/preview', async (req: Request, res: Response) => {
   }
 
   const key = file.previewKey ?? file.thumbnailKey ?? file.storageKey;
+  // Browsers don't recognize .jsonl/.ndjson, so these get stored with
+  // mimeType application/octet-stream -- which the browser (correctly, per
+  // that content type) offers as a download instead of rendering inline.
+  // They're genuinely plain text, so override just the *served* content
+  // type for preview purposes; the stored object/download is untouched.
+  const isJsonLines = /\.(jsonl|ndjson)$/i.test(file.name);
+  const responseContentType = isJsonLines ? 'text/plain; charset=utf-8' : undefined;
   // Same cache-window issue as /:id/download above — a presigned URL to a key
   // that's only in the local cache so far would 404 against MinIO directly.
   const url = (await isPendingFlush(key))
     ? `/api/files/${id}/download/stream`
-    : await getSignedDownloadUrl(key, 300);
+    : await getSignedDownloadUrl(key, 300, responseContentType);
 
   res.json({ previewUrl: url, mimeType: file.mimeType });
 });

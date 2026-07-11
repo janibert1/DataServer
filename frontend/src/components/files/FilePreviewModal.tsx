@@ -94,7 +94,12 @@ function PreviewContent({ file, previewUrl }: { file: DriveFile; previewUrl: str
     );
   }
 
-  if (mimeType.startsWith('text/') || mimeType.includes('json') || mimeType.includes('xml')) {
+  // Browsers report .jsonl/.ndjson (newline-delimited JSON, otherwise plain
+  // text) as application/octet-stream since they don't recognize the
+  // extension -- special-cased here rather than relying on mimeType alone.
+  const isJsonLines = /\.(jsonl|ndjson)$/i.test(file.name);
+
+  if (mimeType.startsWith('text/') || mimeType.includes('json') || mimeType.includes('xml') || isJsonLines) {
     return (
       <div className="w-full max-h-[calc(85vh-120px)] overflow-auto rounded-lg bg-white">
         <iframe

@@ -66,10 +66,15 @@ export async function uploadToS3(
   );
 }
 
-export async function getSignedDownloadUrl(key: string, expiresInSeconds = 300): Promise<string> {
+export async function getSignedDownloadUrl(
+  key: string,
+  expiresInSeconds = 300,
+  responseContentType?: string
+): Promise<string> {
   const command = new GetObjectCommand({
     Bucket: config.s3.bucket,
     Key: key,
+    ResponseContentType: responseContentType,
   });
   return getSignedUrl(s3PresignClient, command, { expiresIn: expiresInSeconds });
 }
