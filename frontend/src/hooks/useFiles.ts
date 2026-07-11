@@ -87,15 +87,31 @@ interface UploadParams {
   threshold: number;   // file size above which chunked upload is used
 }
 
-function estimateSpeedMbps(): number {
+// Real measured probe instead of navigator.connection — Safari doesn't
+// implement that API at all, so it always silently fell back to a hardcoded
+// 10 Mbps guess and badly under-provisioned chunk size/parallelism for every
+// Safari upload, regardless of actual connection speed.
+const PROBE_BYTES = 3 * 1024 * 1024; // 3 MB — big enough that transfer time isn't dominated by request overhead, small enough to be quick even on a slow link
+
+async function measureUploadSpeedMbps(): Promise<number> {
+  const data = new Uint8Array(PROBE_BYTES);
+  const start = performance.now();
+  await api.post('/files/upload/probe', data, {
+    headers: { 'Content-Type': 'application/octet-stream' },
+  });
+  const elapsedSec = Math.max(0.02, (performance.now() - start) / 1000);
+  return (PROBE_BYTES * 8) / (elapsedSec * 1_000_000);
+}
+
+async function estimateSpeedMbps(): Promise<number> {
   if (sessionSpeedMbps !== null) return sessionSpeedMbps;
-  const conn = (navigator as any).connection ?? (navigator as any).mozConnection ?? (navigator as any).webkitConnection;
-  if (conn?.downlink && conn.downlink > 0) return conn.downlink;
-  const type: string | undefined = conn?.effectiveType;
-  if (type === 'slow-2g') return 0.05;
-  if (type === '2g') return 0.3;
-  if (type === '3g') return 2;
-  return 10; // reasonable default when we have no signal
+  try {
+    const measured = await measureUploadSpeedMbps();
+    sessionSpeedMbps = measured;
+    return measured;
+  } catch {
+    return 10; // probe failed (offline, server unreachable) — conservative fallback
+  }
 }
 
 function paramsForSpeed(mbps: number): UploadParams {
@@ -124,7 +140,7 @@ export async function uploadChunked(
   queryClient: any,
   resumeState?: { fileId: string; uploadId: string; storageKey: string; completedParts: { partNumber: number; etag: string }[]; chunkSize: number; totalChunks: number },
 ) {
-  let speedMbps = estimateSpeedMbps();
+  let speedMbps = await estimateSpeedMbps();
 
   // Lock chunkSize for this entire upload — byte offsets for each part number must stay consistent.
   // On resume, use the saved chunkSize so parts align with what was already uploaded to S3.
@@ -224,7 +240,7 @@ export function useUploadFiles() {
       const file = files[i];
       const uploadId = uploadIds[i];
       try {
-        const params = paramsForSpeed(estimateSpeedMbps());
+        const params = paramsForSpeed(await estimateSpeedMbps());
         if (file.size >= params.threshold) {
           await uploadChunked(file, folderId, uploadId, updateUpload, queryClient);
           totalUploaded++;

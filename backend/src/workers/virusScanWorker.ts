@@ -2,7 +2,7 @@ import net from 'net';
 import { Worker, Job } from 'bullmq';
 import { config } from '../config';
 import { prisma } from '../lib/prisma';
-import { getObjectStream } from '../lib/s3';
+import { getObjectStreamWithCache as getObjectStream } from '../lib/cache';
 import { logger } from '../lib/logger';
 import { Readable } from 'stream';
 

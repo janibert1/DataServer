@@ -84,6 +84,12 @@ export const config = {
     email: optional('VAPID_EMAIL', 'mailto:admin@dataserver.app'),
   },
 
+  cache: {
+    enabled: optional('CACHE_ENABLED', 'true') === 'true',
+    dir: optional('CACHE_DIR', '/app/cache'),
+    maxSizeGB: optionalInt('CACHE_MAX_SIZE_GB', 20),
+  },
+
   storage: {
     defaultQuotaBytes: BigInt(optional('DEFAULT_QUOTA_BYTES', '10737418240')),
     maxFileSizeBytes: BigInt(optional('MAX_FILE_SIZE_BYTES', '2147483648')),

@@ -21,11 +21,23 @@ async function getMaxFileSize(): Promise<number> {
 
 const storage = multer.memoryStorage();
 
+// Busboy (which multer uses internally) decodes multipart header fields --
+// including the filename -- as latin1 by default, since that's the HTTP
+// spec's historical assumption for header values. Modern browsers actually
+// send the filename as UTF-8 bytes, so a name like "émoji_😀_文件" arrives
+// mojibake'd (each UTF-8 byte gets read as its own latin1 codepoint). Fix by
+// re-decoding the raw bytes as UTF-8 before anything else touches the name.
+function fixMojibakeFilename(name: string): string {
+  return Buffer.from(name, 'latin1').toString('utf8');
+}
+
 function fileFilter(
   _req: Request,
   file: Express.Multer.File,
   callback: multer.FileFilterCallback
 ): void {
+  file.originalname = fixMojibakeFilename(file.originalname);
+
   const ext = path.extname(file.originalname).toLowerCase();
 
   if (BLOCKED_EXTENSIONS.has(ext)) {

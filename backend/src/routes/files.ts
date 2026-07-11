@@ -6,8 +6,10 @@ import { requireAuth, requireVerifiedEmail } from '../middleware/auth';
 import { uploadMiddleware, sanitizeFileName } from '../middleware/upload';
 import { uploadRateLimiter } from '../middleware/rateLimiter';
 import { prisma } from '../lib/prisma';
-import { uploadToS3, getSignedDownloadUrl, deleteFromS3, buildStorageKey, getObjectStream } from '../lib/s3';
+import { uploadToS3, getSignedDownloadUrl, deleteFromS3, buildStorageKey } from '../lib/s3';
 import { s3Client } from '../lib/s3';
+import { cacheWrite, cacheDelete, isPendingFlush, getObjectStreamWithCache, writeMultipartPart, assembleMultipartUpload, abortMultipartUpload } from '../lib/cache';
+import { cacheFlushQueue } from '../workers/queues';
 import { CreateMultipartUploadCommand, UploadPartCommand, CompleteMultipartUploadCommand, AbortMultipartUploadCommand } from '@aws-sdk/client-s3';
 import { config } from '../config';
 import express from 'express';
@@ -25,7 +27,7 @@ import { checkTotalCapacity } from '../services/storageCapacityService';
 import { AuditAction, FileStatus, SharePermission } from '@prisma/client';
 import { logger } from '../lib/logger';
 import { v4 as uuidv4 } from 'uuid';
-import { emptyTrashQueue, aiSortQueue, zipQueue } from '../workers/queues';
+import { emptyTrashQueue, aiSortQueue, zipQueue, previewQueue } from '../workers/queues';
 
 async function isAiSortActive(userId: string): Promise<boolean> {
   const jobs = await aiSortQueue.getJobs(['active', 'waiting', 'delayed']);
@@ -328,16 +330,30 @@ filesRouter.post(
           },
         });
 
-        await uploadToS3(storageKey, file.buffer, file.mimetype, {
+        const s3Metadata = {
           originalName: file.originalname,
           uploadedBy: user.id,
           checksum,
-        });
+        };
+
+        if (config.cache.enabled) {
+          // Write-through local cache: ack the upload fast, flush to the
+          // (often much slower, NAS-backed) S3/MinIO store in the background.
+          await cacheWrite(storageKey, file.buffer, file.mimetype, s3Metadata);
+          await cacheFlushQueue.add('flush', { key: storageKey });
+        } else {
+          await uploadToS3(storageKey, file.buffer, file.mimetype, s3Metadata);
+        }
 
         await prisma.file.update({
           where: { id: dbFile.id },
           data: { status: FileStatus.ACTIVE },
         });
+
+        // Thumbnail generation (previewWorker skips non-images itself) — this
+        // was defined but never enqueued anywhere, so no image ever got a
+        // thumbnail; every grid/list view showed a broken-thumbnail icon.
+        await previewQueue.add('preview', { fileId: dbFile.id });
 
         await incrementUsage(user.id, totalSize);
 
@@ -420,7 +436,15 @@ filesRouter.get('/:id/download', async (req: Request, res: Response) => {
     return;
   }
 
-  const signedUrl = await getSignedDownloadUrl(file.storageKey, 300);
+  // A file can be marked ACTIVE (and cache-written) well before its background
+  // flush to S3/MinIO finishes — a presigned URL to MinIO would 404 during that
+  // window. While it's still in the local cache, route through our own stream
+  // endpoint instead (which checks cache-then-S3); once it's aged out of the
+  // cache (only happens after a confirmed flush), fall back to the normal fast
+  // presigned-URL-direct-to-MinIO path.
+  const signedUrl = (await isPendingFlush(file.storageKey))
+    ? `/api/files/${id}/download/stream`
+    : await getSignedDownloadUrl(file.storageKey, 300);
 
   await prisma.file.update({ where: { id }, data: { downloadCount: { increment: 1 } } });
   await auditFromRequest(req, AuditAction.FILE_DOWNLOADED, {
@@ -430,6 +454,44 @@ filesRouter.get('/:id/download', async (req: Request, res: Response) => {
   });
 
   res.json({ downloadUrl: signedUrl, filename: file.name, mimeType: file.mimeType });
+});
+
+// Fallback used by /:id/download while a file is still in the local cache
+// (see comment above) — streams straight from cache-then-S3 instead of a
+// presigned MinIO URL, so a fresh upload is always actually downloadable.
+filesRouter.get('/:id/download/stream', async (req: Request, res: Response) => {
+  const user = req.user as any;
+  const { id } = req.params;
+
+  const file = await prisma.file.findUnique({
+    where: { id },
+    select: { name: true, storageKey: true, status: true, ownerId: true, folderId: true, mimeType: true },
+  });
+
+  if (!file || file.status === FileStatus.DELETED) {
+    res.status(404).json({ error: 'File not found.' });
+    return;
+  }
+
+  const canAccess = await checkFileAccess(user.id, id, SharePermission.DOWNLOADER);
+  if (!canAccess) {
+    res.status(403).json({ error: 'Download access denied.' });
+    return;
+  }
+
+  try {
+    const stream = await getObjectStreamWithCache(file.storageKey);
+    res.setHeader('Content-Type', file.mimeType || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.name)}"`);
+    stream.on('error', (err) => {
+      logger.error('Download stream error', { fileId: id, error: err.message });
+      if (!res.headersSent) res.status(500).end();
+    });
+    stream.pipe(res);
+  } catch (err: any) {
+    logger.error('Download stream failed to start', { fileId: id, error: err.message ?? err });
+    res.status(500).json({ error: 'Failed to stream file.' });
+  }
 });
 
 // ─── Preview file ────────────────────────────────────────────
@@ -455,7 +517,11 @@ filesRouter.get('/:id/preview', async (req: Request, res: Response) => {
   }
 
   const key = file.previewKey ?? file.thumbnailKey ?? file.storageKey;
-  const url = await getSignedDownloadUrl(key, 300);
+  // Same cache-window issue as /:id/download above — a presigned URL to a key
+  // that's only in the local cache so far would 404 against MinIO directly.
+  const url = (await isPendingFlush(key))
+    ? `/api/files/${id}/download/stream`
+    : await getSignedDownloadUrl(key, 300);
 
   res.json({ previewUrl: url, mimeType: file.mimeType });
 });
@@ -733,6 +799,7 @@ filesRouter.delete('/:id', async (req: Request, res: Response) => {
 
   try {
     await deleteFromS3(file.storageKey);
+    await cacheDelete(file.storageKey);
     await decrementUsage(user.id, file.size);
   } catch (err) {
     logger.error('Failed to delete file from S3', { err, storageKey: file.storageKey });
@@ -877,12 +944,17 @@ filesRouter.post('/upload/init', requireAuth, requireVerifiedEmail, async (req: 
     folderPath = p2.endsWith('/') ? p2 : p2 + '/';
   }
 
-  const multipart = await s3Client.send(new CreateMultipartUploadCommand({
-    Bucket: config.s3.bucket,
-    Key: storageKey,
-    ContentType: mimeType,
-    Metadata: { originalName: encodeURIComponent(name), uploadedBy: user.id },
-  }));
+  // With caching on, parts land on local disk (see /upload/part below) and never
+  // touch S3 until /upload/complete assembles + flushes them in the background —
+  // so skip the real S3 session entirely and hand out a local uploadId instead.
+  const uploadId = config.cache.enabled
+    ? uuidv4()
+    : (await s3Client.send(new CreateMultipartUploadCommand({
+        Bucket: config.s3.bucket,
+        Key: storageKey,
+        ContentType: mimeType,
+        Metadata: { originalName: encodeURIComponent(name), uploadedBy: user.id },
+      }))).UploadId;
 
   await prisma.file.create({
     data: {
@@ -893,8 +965,21 @@ filesRouter.post('/upload/init', requireAuth, requireVerifiedEmail, async (req: 
     },
   });
 
-  res.json({ fileId, uploadId: multipart.UploadId, storageKey });
+  res.json({ fileId, uploadId, storageKey });
 });
+
+// Lightweight bandwidth probe for the client's chunk-size/parallelism logic —
+// discards the body entirely, does no disk/DB work, exists purely so the
+// frontend can time a real transfer instead of trusting navigator.connection
+// (which Safari doesn't implement at all, silently falling back to a hardcoded
+// low-bandwidth guess and badly under-provisioning uploads as a result).
+filesRouter.post(
+  '/upload/probe',
+  express.raw({ limit: '10mb', type: 'application/octet-stream' }),
+  (req: Request, res: Response) => {
+    res.json({ receivedBytes: (req.body as Buffer)?.length ?? 0 });
+  }
+);
 
 filesRouter.post(
   '/upload/part',
@@ -909,16 +994,35 @@ filesRouter.post(
     if (!file) { res.status(404).json({ error: 'Upload session not found' }); return; }
 
     const chunk = req.body as Buffer;
+    const pn = parseInt(partNumber);
+
+    if (config.cache.enabled) {
+      // Buffer to local disk — fast, no NAS round-trip per part. Assembled
+      // into the real S3/MinIO object by /upload/complete below.
+      try {
+        await writeMultipartPart(uploadId, pn, chunk);
+      } catch (err) {
+        logger.error('Multipart part write failed', {
+          uploadId, storageKey, partNumber: pn,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        res.status(500).json({ error: 'Failed to write upload part.' });
+        return;
+      }
+      res.json({ etag: `local-${pn}`, partNumber: pn });
+      return;
+    }
+
     const result = await s3Client.send(new UploadPartCommand({
       Bucket: config.s3.bucket,
       Key: storageKey,
       UploadId: uploadId,
-      PartNumber: parseInt(partNumber),
+      PartNumber: pn,
       Body: chunk,
       ContentLength: chunk.length,
     }));
 
-    res.json({ etag: result.ETag, partNumber: parseInt(partNumber) });
+    res.json({ etag: result.ETag, partNumber: pn });
   }
 );
 
@@ -929,18 +1033,31 @@ filesRouter.post('/upload/complete', requireAuth, async (req: Request, res: Resp
     const file = await prisma.file.findFirst({ where: { id: fileId, storageKey, ownerId: user.id, status: FileStatus.UPLOADING } });
     if (!file) { res.status(404).json({ error: 'Upload session not found' }); return; }
 
-    await s3Client.send(new CompleteMultipartUploadCommand({
-      Bucket: config.s3.bucket,
-      Key: storageKey,
-      UploadId: uploadId,
-      MultipartUpload: {
-        Parts: (parts as { partNumber: number; etag: string }[])
-          .sort((a, b) => a.partNumber - b.partNumber)
-          .map((p) => ({ PartNumber: p.partNumber, ETag: p.etag })),
-      },
-    }));
+    const partNumbers = (parts as { partNumber: number; etag: string }[]).map((p) => p.partNumber);
+
+    if (config.cache.enabled) {
+      // Assemble the buffered parts into the normal cache path and flush to
+      // S3/MinIO in the background — same fast-ack benefit as small uploads.
+      await assembleMultipartUpload(uploadId, partNumbers, storageKey, file.mimeType, {
+        originalName: file.originalName,
+        uploadedBy: user.id,
+      });
+      await cacheFlushQueue.add('flush', { key: storageKey });
+    } else {
+      await s3Client.send(new CompleteMultipartUploadCommand({
+        Bucket: config.s3.bucket,
+        Key: storageKey,
+        UploadId: uploadId,
+        MultipartUpload: {
+          Parts: (parts as { partNumber: number; etag: string }[])
+            .sort((a, b) => a.partNumber - b.partNumber)
+            .map((p) => ({ PartNumber: p.partNumber, ETag: p.etag })),
+        },
+      }));
+    }
 
     await prisma.file.update({ where: { id: fileId }, data: { status: FileStatus.ACTIVE } });
+    await previewQueue.add('preview', { fileId });
     await incrementUsage(user.id, file.size);
     await auditFromRequest(req, AuditAction.FILE_UPLOADED, {
       entityType: 'File', entityId: fileId,
@@ -951,9 +1068,15 @@ filesRouter.post('/upload/complete', requireAuth, async (req: Request, res: Resp
       where: { id: fileId },
       select: { id: true, name: true, mimeType: true, size: true, createdAt: true, storageKey: true, ownerId: true, folderId: true, status: true, updatedAt: true },
     });
-    res.json({ file: result });
+    res.json({ file: result ? { ...result, size: result.size.toString() } : result });
   } catch (err: any) {
-    // Return a real error so the client knows to retry the complete step (parts are still valid on S3)
+    // Return a real error so the client knows to retry the complete step (parts are still valid),
+    // AND log it — this previously failed completely silently (500 with no server-side trace at all).
+    logger.error('Upload finalization failed', {
+      fileId, uploadId, storageKey,
+      error: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+    });
     res.status(500).json({ error: `Upload finalization failed: ${err.message ?? err}` });
   }
 });
@@ -964,7 +1087,11 @@ filesRouter.post('/upload/abort', requireAuth, async (req: Request, res: Respons
 
   const file = await prisma.file.findFirst({ where: { id: fileId, ownerId: user.id, status: FileStatus.UPLOADING } });
   if (file) {
-    await s3Client.send(new AbortMultipartUploadCommand({ Bucket: config.s3.bucket, Key: storageKey, UploadId: uploadId })).catch(() => {});
+    if (config.cache.enabled) {
+      await abortMultipartUpload(uploadId).catch(() => {});
+    } else {
+      await s3Client.send(new AbortMultipartUploadCommand({ Bucket: config.s3.bucket, Key: storageKey, UploadId: uploadId })).catch(() => {});
+    }
     await prisma.file.delete({ where: { id: fileId } }).catch(() => {});
   }
   res.json({ message: 'Aborted' });
@@ -1054,7 +1181,7 @@ filesRouter.post('/download-zip', async (req, res) => {
 
     for (const entry of entries) {
       try {
-        const stream = await getObjectStream(entry.storageKey);
+        const stream = await getObjectStreamWithCache(entry.storageKey);
         archive.append(stream, { name: entry.zipPath });
       } catch (err) {
         logger.warn('Skipping file in zip (stream error)', { storageKey: entry.storageKey, err });

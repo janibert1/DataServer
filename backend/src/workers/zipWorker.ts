@@ -1,11 +1,10 @@
 import { Worker, Job } from 'bullmq';
 import archiver from 'archiver';
-import fs from 'fs';
-import path from 'path';
 import { config } from '../config';
 import { prisma } from '../lib/prisma';
-import { s3Client, getObjectStream } from '../lib/s3';
-import { PutObjectCommand } from '@aws-sdk/client-s3';
+import { s3Client } from '../lib/s3';
+import { getObjectStreamWithCache as getObjectStream } from '../lib/cache';
+import { Upload } from '@aws-sdk/lib-storage';
 import { logger } from '../lib/logger';
 import { createNotification } from '../services/notificationService';
 
@@ -73,98 +72,86 @@ async function processZip(job: Job<ZipJobData>): Promise<void> {
   }
 
   const storageKey = `downloads/${userId}/${downloadId}.zip`;
-  const tmpPath = path.join('/tmp', `zip-${downloadId}.zip`);
 
-  try {
-    // Stream zip to temp file to avoid buffering everything in RAM
-    await new Promise<void>((resolve, reject) => {
-      const output = fs.createWriteStream(tmpPath);
-      const archive = archiver('zip', { zlib: { level: 1 } });
+  // Stream the archive straight into a multipart S3 upload (same pattern as
+  // driveOpsWorker's zip-to-drive) instead of writing to a temp file and then
+  // re-uploading it with a plain PutObjectCommand + a precomputed ContentLength.
+  // That older approach broke under load: the AWS SDK v3 retries a failed
+  // PutObjectCommand by resending the *same* fs.ReadStream, which has already
+  // been partially/fully drained by the first attempt, so the retry sends
+  // fewer bytes than the ContentLength header promised -- surfacing as
+  // "You did not provide the number of bytes specified by the Content-Length
+  // HTTP header." Upload (lib-storage) buffers each part before sending, so a
+  // retry re-sends a real buffer instead of a drained stream.
+  const archive = archiver('zip', { zlib: { level: 1 } });
+  archive.on('warning', (err) => logger.warn('Zip archiver warning', { downloadId, err }));
 
-      archive.on('error', reject);
-      output.on('close', resolve);
-      output.on('error', reject);
-      archive.pipe(output);
+  const s3Upload = new Upload({
+    client: s3Client,
+    params: { Bucket: config.s3.bucket, Key: storageKey, Body: archive, ContentType: 'application/zip' },
+  });
 
-      // Process in batches: fetch BATCH_SIZE S3 streams in parallel, append sequentially
-      const BATCH_SIZE = 20;
+  // Process in batches: fetch BATCH_SIZE S3 streams in parallel, append sequentially
+  const BATCH_SIZE = 20;
+  let processed = 0;
+  for (let i = 0; i < entries.length; i += BATCH_SIZE) {
+    const batch = entries.slice(i, i + BATCH_SIZE);
+    const results = await Promise.allSettled(
+      batch.map((e) => getObjectStream(e.storageKey)),
+    );
 
-      async function run(): Promise<void> {
-        let processed = 0;
-        for (let i = 0; i < entries.length; i += BATCH_SIZE) {
-          const batch = entries.slice(i, i + BATCH_SIZE);
-          const results = await Promise.allSettled(
-            batch.map((e) => getObjectStream(e.storageKey)),
-          );
-
-          for (let j = 0; j < batch.length; j++) {
-            const r = results[j];
-            if (r.status === 'fulfilled') {
-              // Attach error listener to prevent unhandled 'error' events on the stream
-              r.value.on('error', () => {});
-              archive.append(r.value, { name: batch[j].zipPath });
-            } else {
-              logger.warn('Skipping file in zip', { storageKey: batch[j].storageKey });
-            }
-          }
-
-          processed += batch.length;
-
-          // Yield to event loop so archiver can drain between batches
-          await new Promise<void>((res) => setImmediate(res));
-
-          // Update progress every 200 files
-          if (processed % 200 === 0 || processed >= entries.length) {
-            await prisma.zipDownload.update({
-              where: { id: downloadId },
-              data: { fileCount: processed },
-            }).catch(() => {});
-            logger.info('Zip progress', { downloadId, processed, total: entries.length });
-          }
-        }
-
-        await archive.finalize();
+    for (let j = 0; j < batch.length; j++) {
+      const r = results[j];
+      if (r.status === 'fulfilled') {
+        // Attach error listener to prevent unhandled 'error' events on the stream
+        r.value.on('error', () => {});
+        archive.append(r.value, { name: batch[j].zipPath });
+      } else {
+        logger.warn('Skipping file in zip', { storageKey: batch[j].storageKey });
       }
+    }
 
-      run().catch(reject);
-    });
+    processed += batch.length;
 
-    // Upload the temp file to S3
-    const stat = fs.statSync(tmpPath);
-    const fileStream = fs.createReadStream(tmpPath);
+    // Yield to event loop so archiver can drain between batches
+    await new Promise<void>((res) => setImmediate(res));
 
-    await s3Client.send(new PutObjectCommand({
-      Bucket: config.s3.bucket,
-      Key: storageKey,
-      Body: fileStream,
-      ContentType: 'application/zip',
-      ContentLength: stat.size,
-    }));
-
-    const expiresAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000);
-    await prisma.zipDownload.update({
-      where: { id: downloadId },
-      data: {
-        status: 'READY',
-        storageKey,
-        sizeBytes: BigInt(stat.size),
-        expiresAt,
-        fileCount: entries.length,
-      },
-    });
-
-    await createNotification({
-      userId,
-      type: 'TASK_COMPLETED',
-      title: 'Download ready',
-      body: `"${download.name}" is ready to download (${entries.length} files).`,
-      link: '/drive/downloads',
-    });
-
-    logger.info('Zip ready', { downloadId, fileCount: entries.length, storageKey, sizeBytes: stat.size });
-  } finally {
-    fs.unlink(tmpPath, () => {});
+    // Update progress every 200 files
+    if (processed % 200 === 0 || processed >= entries.length) {
+      await prisma.zipDownload.update({
+        where: { id: downloadId },
+        data: { fileCount: processed },
+      }).catch(() => {});
+      logger.info('Zip progress', { downloadId, processed, total: entries.length });
+    }
   }
+
+  await archive.finalize();
+  await s3Upload.done();
+
+  const zipSize = BigInt(archive.pointer());
+
+  const expiresAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000);
+  await prisma.zipDownload.update({
+    where: { id: downloadId },
+    data: {
+      status: 'READY',
+      storageKey,
+      sizeBytes: zipSize,
+      expiresAt,
+      fileCount: entries.length,
+    },
+  });
+
+  await createNotification({
+    userId,
+    type: 'TASK_COMPLETED',
+    title: 'Download ready',
+    body: `"${download.name}" is ready to download (${entries.length} files).`,
+    link: '/drive/downloads',
+  });
+
+  logger.info('Zip ready', { downloadId, fileCount: entries.length, storageKey, sizeBytes: zipSize.toString() });
 }
 
 export const zipWorker = new Worker<ZipJobData>('zip-queue', processZip, {

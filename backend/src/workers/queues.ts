@@ -56,3 +56,13 @@ export const driveOpsQueue = new Queue('drive-ops-queue', {
   connection,
   defaultJobOptions,
 });
+
+// Queue for flushing locally-cached uploads to S3/MinIO in the background
+export const cacheFlushQueue = new Queue('cache-flush-queue', {
+  connection,
+  defaultJobOptions: {
+    ...defaultJobOptions,
+    attempts: 5,
+    backoff: { type: 'exponential', delay: 5000 },
+  },
+});

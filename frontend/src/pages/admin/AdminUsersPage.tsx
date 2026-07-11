@@ -260,7 +260,7 @@ export function AdminUsersPage() {
         <div>
           <h1 className="text-xl font-bold text-slate-900">Users</h1>
           <p className="text-sm text-slate-500 mt-1">
-            {data?.pagination.total ?? '…'} registered users
+            {data?.pagination.total ?? '…'} registered user{data?.pagination.total === 1 ? '' : 's'}
           </p>
         </div>
       </div>
