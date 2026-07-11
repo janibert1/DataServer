@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Star, Share2, MoreVertical, Folder } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import clsx from 'clsx';
@@ -6,6 +6,39 @@ import { DriveFile, DriveFolder } from '../../types';
 import { FileIcon } from './FileIcon';
 import { FileContextMenu } from './FileContextMenu';
 import { formatBytes } from '../../lib/format';
+import { getFilePreviewUrl } from '../../hooks/useFiles';
+
+// /api/files/:id/preview returns JSON ({ previewUrl, mimeType }), not image
+// bytes -- pointing an <img> src directly at it (the previous behavior) never
+// renders anything and never even issues a request the browser recognizes as
+// an image fetch. Resolve the actual signed URL first, same as the preview
+// modal already does, then render that.
+function Thumbnail({ fileId, mimeType, alt }: { fileId: string; mimeType: string; alt: string }) {
+  const [src, setSrc] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    getFilePreviewUrl(fileId)
+      .then((data) => { if (!cancelled) setSrc(data.previewUrl); })
+      .catch(() => { if (!cancelled) setFailed(true); });
+    return () => { cancelled = true; };
+  }, [fileId]);
+
+  // Fall back to the generic file icon while loading and on any failure,
+  // instead of leaving the card blank.
+  if (failed || !src) return <FileIcon mimeType={mimeType} className="w-14 h-14" size={28} />;
+
+  return (
+    <img
+      src={src}
+      alt={alt}
+      className="w-full h-full object-cover"
+      loading="lazy"
+      onError={() => setFailed(true)}
+    />
+  );
+}
 
 export interface DragDropPayload {
   type: 'file' | 'folder';
@@ -231,15 +264,7 @@ function FileCard({
             </div>
           )}
           {isImage && file.thumbnailKey ? (
-            <img
-              src={`/api/files/${file.id}/preview`}
-              alt={file.name}
-              className="w-full h-full object-cover"
-              loading="lazy"
-              onError={(e) => {
-                (e.target as HTMLImageElement).style.display = 'none';
-              }}
-            />
+            <Thumbnail fileId={file.id} mimeType={file.mimeType} alt={file.name} />
           ) : (
             <FileIcon mimeType={file.mimeType} className="w-14 h-14" size={28} />
           )}

@@ -224,6 +224,7 @@ export async function uploadChunked(
   queryClient.invalidateQueries({ queryKey: ['files'] });
   queryClient.invalidateQueries({ queryKey: ['folders'] });
   queryClient.invalidateQueries({ queryKey: ['folder-contents'] });
+  queryClient.invalidateQueries({ queryKey: ['folder'] });
   queryClient.invalidateQueries({ queryKey: ['auth', 'me'] });
 }
 
@@ -295,6 +296,7 @@ export function useUploadFiles() {
       queryClient.invalidateQueries({ queryKey: ['files'] });
       queryClient.invalidateQueries({ queryKey: ['folders'] });
       queryClient.invalidateQueries({ queryKey: ['folder-contents'] });
+      queryClient.invalidateQueries({ queryKey: ['folder'] });
       queryClient.invalidateQueries({ queryKey: ['auth', 'me'] });
     }
   };
@@ -355,6 +357,7 @@ export function useUploadFiles() {
       queryClient.invalidateQueries({ queryKey: ['files'] });
       queryClient.invalidateQueries({ queryKey: ['folders'] });
       queryClient.invalidateQueries({ queryKey: ['folder-contents'] });
+      queryClient.invalidateQueries({ queryKey: ['folder'] });
       queryClient.invalidateQueries({ queryKey: ['auth', 'me'] });
     } catch (err) {
       toast.error(getErrorMessage(err));
@@ -411,6 +414,8 @@ export function useMoveFile() {
       queryClient.invalidateQueries({ queryKey: ['files'] });
       queryClient.invalidateQueries({ queryKey: ['folders'] });
       queryClient.invalidateQueries({ queryKey: ['folder-contents'] });
+      // Moving a file changes both the source and destination folder's aggregate size
+      queryClient.invalidateQueries({ queryKey: ['folder'] });
       toast.success('File moved.');
     },
     onError: (err) => toast.error(getErrorMessage(err)),
@@ -423,6 +428,11 @@ export function useTrashFile() {
     mutationFn: (id: string) => api.post(`/files/${id}/trash`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['files'] });
+      // Same query-key gap as the upload-into-subfolder bug: without these,
+      // trashing a file from inside a subfolder view leaves that folder's
+      // item grid/header showing the removed file until a manual reload.
+      queryClient.invalidateQueries({ queryKey: ['folder-contents'] });
+      queryClient.invalidateQueries({ queryKey: ['folder'] });
       toast.success('File moved to trash.');
     },
     onError: (err) => toast.error(getErrorMessage(err)),
@@ -435,6 +445,8 @@ export function useRestoreFile() {
     mutationFn: (id: string) => api.post(`/files/${id}/restore`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['files'] });
+      queryClient.invalidateQueries({ queryKey: ['folder-contents'] });
+      queryClient.invalidateQueries({ queryKey: ['folder'] });
       toast.success('File restored.');
     },
     onError: (err) => toast.error(getErrorMessage(err)),
@@ -475,6 +487,7 @@ export function useBulkTrash() {
       queryClient.invalidateQueries({ queryKey: ['files'] });
       queryClient.invalidateQueries({ queryKey: ['folders'] });
       queryClient.invalidateQueries({ queryKey: ['folder-contents'] });
+      queryClient.invalidateQueries({ queryKey: ['folder'] });
       toast.success(res.data.message);
     },
     onError: (err) => toast.error(getErrorMessage(err)),

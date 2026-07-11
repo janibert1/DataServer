@@ -58,6 +58,7 @@ export function useCreateFolder() {
     onSuccess: (_data, vars) => {
       queryClient.invalidateQueries({ queryKey: ['folders', vars.parentId ?? 'root'] });
       queryClient.invalidateQueries({ queryKey: ['folder-contents', vars.parentId] });
+      if (vars.parentId) queryClient.invalidateQueries({ queryKey: ['folder', vars.parentId] });
       toast.success('Folder created.');
     },
     onError: (err) => toast.error(getErrorMessage(err)),
@@ -72,6 +73,7 @@ export function useRenameFolder() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['folders'] });
       queryClient.invalidateQueries({ queryKey: ['folder-contents'] });
+      queryClient.invalidateQueries({ queryKey: ['folder'] });
       toast.success('Folder updated.');
     },
     onError: (err) => toast.error(getErrorMessage(err)),
@@ -86,6 +88,8 @@ export function useMoveFolder() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['folders'] });
       queryClient.invalidateQueries({ queryKey: ['folder-contents'] });
+      // Moving a folder changes both its old and new parent's aggregate size
+      queryClient.invalidateQueries({ queryKey: ['folder'] });
       toast.success('Folder moved.');
     },
     onError: (err) => toast.error(getErrorMessage(err)),
@@ -107,6 +111,8 @@ export function useTrashFolder() {
       queryClient.setQueriesData<any>({ queryKey: ['folder-contents'] }, (old: any) =>
         old ? { ...old, folders: (old.folders ?? []).filter((f: any) => f.id !== id) } : old
       );
+      // Parent's aggregate size changes once the trash job removes this folder's bytes
+      queryClient.invalidateQueries({ queryKey: ['folder'] });
     },
     onError: (err) => toast.error(getErrorMessage(err)),
   });

@@ -33,6 +33,7 @@ export function DriveOpsPanel() {
             queryClient.invalidateQueries({ queryKey: ['files'] });
             queryClient.invalidateQueries({ queryKey: ['folders'] });
             queryClient.invalidateQueries({ queryKey: ['folder-contents'] });
+            queryClient.invalidateQueries({ queryKey: ['folder'] });
             queryClient.invalidateQueries({ queryKey: ['auth', 'me'] });
           }
         } catch { /* ignore transient errors */ }
