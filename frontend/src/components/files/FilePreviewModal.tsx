@@ -92,6 +92,10 @@ function PreviewContent({ file, previewUrl }: { file: DriveFile; previewUrl: str
     );
   }
 
+  return <NoPreviewAvailable />;
+}
+
+function NoPreviewAvailable() {
   return (
     <div className="flex flex-col items-center gap-4 py-12 text-center">
       <div className="w-20 h-20 rounded-2xl bg-slate-100 flex items-center justify-center">
@@ -248,7 +252,16 @@ export function FilePreviewModal({ file, onClose, onNext, onPrev, hasNext, hasPr
                 </div>
               ) : previewUrl && file ? (
                 <PreviewContent file={file} previewUrl={previewUrl} />
-              ) : null}
+              ) : (
+                // getFilePreviewUrl failed, or the file has no preview URL for
+                // some other reason -- show the same fallback PreviewContent
+                // uses instead of rendering nothing, which reads as a stuck
+                // modal (this is what the infinite-spinner reports were
+                // actually hitting: isLoading correctly resolves to false,
+                // but a blank void looks the same as "still working" to a
+                // user watching the modal).
+                <NoPreviewAvailable />
+              )}
             </div>
 
             {/* Next button */}

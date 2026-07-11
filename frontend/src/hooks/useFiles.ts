@@ -547,7 +547,11 @@ export async function getFileDownloadUrl(id: string): Promise<{ downloadUrl: str
 }
 
 export async function getFilePreviewUrl(id: string): Promise<{ previewUrl: string; mimeType: string }> {
-  const res = await api.get(`/files/${id}/preview`);
+  // This is just signed-URL generation, not a data transfer -- it should
+  // always be near-instant. Override the app-wide 120s axios timeout so a
+  // stuck backend/proxy connection fails fast and falls back to
+  // "Preview not available" instead of leaving the modal looking stuck.
+  const res = await api.get(`/files/${id}/preview`, { timeout: 15000 });
   return res.data;
 }
 
