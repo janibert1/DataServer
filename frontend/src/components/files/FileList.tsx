@@ -6,6 +6,7 @@ import { DriveFile, DriveFolder, SortField, SortDir } from '../../types';
 import { FileIcon } from './FileIcon';
 import { FileContextMenu } from './FileContextMenu';
 import { DragDropPayload, SelectionItem } from './FileGrid';
+import { formatBytes } from '../../lib/format';
 
 interface Props {
   files: DriveFile[];
@@ -24,13 +25,6 @@ interface Props {
   onToggleSelect?: (item: SelectionItem) => void;
 }
 
-function formatBytes(bytes: string | number): string {
-  const n = typeof bytes === 'string' ? parseInt(bytes) : bytes;
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 ** 2) return `${(n / 1024).toFixed(0)} KB`;
-  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
-  return `${(n / 1024 ** 3).toFixed(2)} GB`;
-}
 
 function setDragData(e: React.DragEvent, payload: DragDropPayload) {
   e.dataTransfer.setData('application/json', JSON.stringify(payload));

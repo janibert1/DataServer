@@ -8,6 +8,7 @@ import { FilePreviewModal } from '../../components/files/FilePreviewModal';
 import { DriveFile } from '../../types';
 import toast from 'react-hot-toast';
 import clsx from 'clsx';
+import { formatBytes } from '../../lib/format';
 
 interface BackupFile {
   id: string;
@@ -31,13 +32,6 @@ interface BackupFolder {
   updatedAt: string;
 }
 
-function formatBytes(bytes: string | number): string {
-  const n = typeof bytes === 'string' ? parseInt(bytes) : bytes;
-  if (n < 1024) return `${n} B`;
-  if (n < 1048576) return `${(n / 1024).toFixed(1)} KB`;
-  if (n < 1073741824) return `${(n / 1048576).toFixed(1)} MB`;
-  return `${(n / 1073741824).toFixed(2)} GB`;
-}
 
 // Backup files come back from the API with a narrower shape than the
 // regular My Drive listing. FilePreviewModal only actually touches

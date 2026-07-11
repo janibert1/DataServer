@@ -22,15 +22,8 @@ import { useAuthStore } from '../../store/authStore';
 import clsx from 'clsx';
 import { api } from '../../lib/axios';
 import toast from 'react-hot-toast';
+import { formatBytes } from '../../lib/format';
 
-function formatBytes(bytes: string | number): string {
-  const b = typeof bytes === 'string' ? parseFloat(bytes) : bytes;
-  if (b === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(b) / Math.log(k));
-  return `${parseFloat((b / k ** i).toFixed(1))} ${sizes[i]}`;
-}
 
 const PERMISSION_LABELS: Record<string, string> = {
   VIEWER: 'Viewer', DOWNLOADER: 'Downloader', CONTRIBUTOR: 'Contributor',

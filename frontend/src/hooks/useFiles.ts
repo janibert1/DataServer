@@ -223,6 +223,7 @@ export async function uploadChunked(
   updateUpload(uploadItemId, { status: 'complete', progress: 100 });
   queryClient.invalidateQueries({ queryKey: ['files'] });
   queryClient.invalidateQueries({ queryKey: ['folders'] });
+  queryClient.invalidateQueries({ queryKey: ['folder-contents'] });
   queryClient.invalidateQueries({ queryKey: ['auth', 'me'] });
 }
 
@@ -293,6 +294,7 @@ export function useUploadFiles() {
       toast.success(`Uploaded ${uploaded} file${uploaded > 1 ? 's' : ''}.`);
       queryClient.invalidateQueries({ queryKey: ['files'] });
       queryClient.invalidateQueries({ queryKey: ['folders'] });
+      queryClient.invalidateQueries({ queryKey: ['folder-contents'] });
       queryClient.invalidateQueries({ queryKey: ['auth', 'me'] });
     }
   };
@@ -352,6 +354,7 @@ export function useUploadFiles() {
       toast.success(`Folder "${rootName}" uploaded (${totalUploaded} file${totalUploaded !== 1 ? 's' : ''}).`);
       queryClient.invalidateQueries({ queryKey: ['files'] });
       queryClient.invalidateQueries({ queryKey: ['folders'] });
+      queryClient.invalidateQueries({ queryKey: ['folder-contents'] });
       queryClient.invalidateQueries({ queryKey: ['auth', 'me'] });
     } catch (err) {
       toast.error(getErrorMessage(err));

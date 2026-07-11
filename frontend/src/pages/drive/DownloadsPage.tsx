@@ -4,6 +4,7 @@ import { formatDistanceToNow } from 'date-fns';
 import { api } from '../../lib/axios';
 import toast from 'react-hot-toast';
 import clsx from 'clsx';
+import { formatBytes } from '../../lib/format';
 
 interface ZipDownload {
   id: string;
@@ -16,13 +17,6 @@ interface ZipDownload {
   createdAt: string;
 }
 
-function formatBytes(bytes: string | number | null): string {
-  if (bytes === null) return '—';
-  const n = typeof bytes === 'string' ? parseInt(bytes) : bytes;
-  if (n < 1024 ** 2) return `${(n / 1024).toFixed(0)} KB`;
-  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
-  return `${(n / 1024 ** 3).toFixed(2)} GB`;
-}
 
 function StatusBadge({ status }: { status: ZipDownload['status'] }) {
   if (status === 'READY') return (

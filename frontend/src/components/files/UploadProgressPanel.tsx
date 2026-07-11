@@ -5,11 +5,8 @@ import { uploadChunked } from '../../hooks/useFiles';
 import { useEffect, useRef } from 'react';
 import toast from 'react-hot-toast';
 import { getErrorMessage } from '../../lib/axios';
+import { formatBytes } from '../../lib/format';
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(0)} KB`;
-  return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
-}
 
 export function UploadProgressPanel() {
   const { uploads, isVisible, setVisible, removeUpload, clearCompleted, addUpload, updateUpload, restoreFromStorage } = useUploadStore();

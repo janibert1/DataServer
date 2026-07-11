@@ -6,6 +6,7 @@ import clsx from 'clsx';
 import { api, getErrorMessage } from '../../lib/axios';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import toast from 'react-hot-toast';
+import { formatBytes } from '../../lib/format';
 
 // ── Hooks ─────────────────────────────────────────────────────────────────────
 interface StorageStats {
@@ -56,12 +57,6 @@ function useAdjustQuota() {
 }
 
 // ── Utils ─────────────────────────────────────────────────────────────────────
-function formatBytes(bytes: string | number): string {
-  const n = typeof bytes === 'string' ? parseInt(bytes) : bytes;
-  if (n < 1024 ** 2) return `${(n / 1024).toFixed(0)} KB`;
-  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
-  return `${(n / 1024 ** 3).toFixed(2)} GB`;
-}
 
 function toGB(bytes: string | number): number {
   const n = typeof bytes === 'string' ? parseInt(bytes) : bytes;

@@ -6,6 +6,7 @@ import { DriveFile } from '../../types';
 import { getFileDownloadUrl, getFilePreviewUrl } from '../../hooks/useFiles';
 import { LoadingSpinner } from '../common/LoadingSpinner';
 import clsx from 'clsx';
+import { formatBytes } from '../../lib/format';
 
 interface Props {
   file: DriveFile | null;
@@ -17,12 +18,6 @@ interface Props {
   hasPrev?: boolean;
 }
 
-function formatBytes(bytes: string | number): string {
-  const n = typeof bytes === 'string' ? parseInt(bytes) : bytes;
-  if (n < 1024 ** 2) return `${(n / 1024).toFixed(0)} KB`;
-  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
-  return `${(n / 1024 ** 3).toFixed(2)} GB`;
-}
 
 function PreviewContent({ file, previewUrl }: { file: DriveFile; previewUrl: string }) {
   const { mimeType } = file;

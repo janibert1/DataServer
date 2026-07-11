@@ -10,13 +10,8 @@ import { EmptyState } from '../../components/common/EmptyState';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import toast from 'react-hot-toast';
 import { getErrorMessage } from '../../lib/axios';
+import { formatBytes } from '../../lib/format';
 
-function formatBytes(bytes: string | number) {
-  const n = typeof bytes === 'string' ? parseInt(bytes) : bytes;
-  if (n < 1024 ** 2) return `${(n / 1024).toFixed(0)} KB`;
-  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
-  return `${(n / 1024 ** 3).toFixed(2)} GB`;
-}
 
 function DaysLeft({ trashedAt }: { trashedAt: string | null }) {
   if (!trashedAt) return <span className="text-sm text-slate-400">—</span>;
