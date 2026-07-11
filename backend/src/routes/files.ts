@@ -331,7 +331,13 @@ filesRouter.post(
         });
 
         const s3Metadata = {
-          originalName: file.originalname,
+          // S3 metadata is sent as a raw x-amz-meta-* HTTP header, which must
+          // be ASCII -- a non-ASCII originalname (accents/emoji/CJK/Cyrillic,
+          // now decoded correctly after the multer/busboy latin1 fix) throws
+          // "Invalid character in header content" and permanently fails the
+          // cache-flush-to-S3 job. Percent-encode it, matching the pattern
+          // already used for this same field in the multipart upload route.
+          originalName: encodeURIComponent(file.originalname),
           uploadedBy: user.id,
           checksum,
         };
