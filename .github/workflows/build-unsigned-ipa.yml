@@ -24,7 +24,7 @@ jobs:
           node-version: 20
 
       - name: Install JS dependencies
-        run: npm ci
+        run: npm ci --legacy-peer-deps
 
       - name: Expo prebuild (generate native ios/ project)
         run: npx expo prebuild --platform ios --no-install
