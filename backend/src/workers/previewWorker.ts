@@ -9,6 +9,7 @@ import { prisma } from '../lib/prisma';
 import { uploadToS3 } from '../lib/s3';
 import { getObjectStreamWithCache as getObjectStream } from '../lib/cache';
 import { logger } from '../lib/logger';
+import { isRawImageMimeType } from '../lib/mimeResolve';
 
 export interface PreviewJobData {
   fileId: string;
@@ -60,6 +61,39 @@ async function remuxVideoPreview(fileId: string, storageKey: string): Promise<st
   }
 }
 
+// Camera RAW formats (NEF/CR2/ARW/DNG/...) aren't image formats libvips can
+// decode at all -- full RAW demosaicing needs a dedicated decoder (LibRaw)
+// and is overkill for a thumbnail/preview anyway. Every mainstream camera
+// already embeds a full-size-or-close JPEG preview in the RAW file for
+// exactly this purpose (it's what the camera's own LCD and every RAW-aware
+// photo app use for fast previews) -- exiftool -b extracts it directly, no
+// demosaic needed. Tries the biggest tag first, falls back down.
+async function extractRawEmbeddedPreview(sourceBuffer: Buffer): Promise<Buffer> {
+  const tmpDir = os.tmpdir();
+  const srcPath = path.join(tmpDir, `raw-src-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  await fs.promises.writeFile(srcPath, sourceBuffer);
+  try {
+    for (const tag of ['-JpgFromRaw', '-PreviewImage', '-ThumbnailImage']) {
+      const extracted = await new Promise<Buffer | null>((resolve) => {
+        const chunks: Buffer[] = [];
+        const proc = spawn('exiftool', ['-b', tag, srcPath]);
+        proc.stdout.on('data', (chunk: Buffer) => chunks.push(chunk));
+        proc.on('error', () => resolve(null));
+        proc.on('close', (code) => {
+          const out = Buffer.concat(chunks);
+          // A real embedded JPEG is at minimum several KB -- guards against
+          // exiftool's empty-but-zero-exit-code output when a tag is absent.
+          resolve(code === 0 && out.length > 1000 ? out : null);
+        });
+      });
+      if (extracted) return extracted;
+    }
+    throw new Error('No embedded preview image found in RAW file');
+  } finally {
+    await fs.promises.rm(srcPath, { force: true });
+  }
+}
+
 async function processPreviewJob(job: Job<PreviewJobData>): Promise<void> {
   const { fileId } = job.data;
 
@@ -98,38 +132,68 @@ async function processPreviewJob(job: Job<PreviewJobData>): Promise<void> {
 
       if (sharp) {
         const thumbnailKey = `thumbnails/${fileId}.webp`;
+        const previewKey = `previews/${fileId}.webp`;
 
-        // Stream the original file from S3
+        // Read the original into memory once and derive both sizes from the
+        // same buffer -- simpler and more robust than juggling two stream
+        // pipes off one source, and these are already S3-object-sized reads
+        // elsewhere in this worker (video remux does the same).
         const sourceStream = await getObjectStream(file.storageKey);
-
-        // Resize to 400 px wide, preserve aspect ratio, output as WebP
-        const transformer = sharp().resize({ width: 400, withoutEnlargement: true }).webp();
-
-        // Collect the transformed output into a Buffer
-        const chunks: Buffer[] = [];
+        const sourceChunks: Buffer[] = [];
         await new Promise<void>((resolve, reject) => {
-          sourceStream.pipe(transformer);
-          transformer.on('data', (chunk: Buffer) => chunks.push(chunk));
-          transformer.on('end', resolve);
-          transformer.on('error', reject);
+          sourceStream.on('data', (chunk: Buffer) => sourceChunks.push(chunk));
+          sourceStream.on('end', resolve);
           sourceStream.on('error', reject);
         });
+        let sourceBuffer: Buffer = Buffer.concat(sourceChunks);
 
-        const thumbnailBuffer = Buffer.concat(chunks);
+        // Camera RAW: libvips has no decoder for these at all -- swap in the
+        // embedded JPEG preview the camera already generated, then the rest
+        // of this pipeline (thumbnail + preview resize/webp) runs unchanged
+        // against that instead of the undecodable raw sensor data.
+        if (isRawImageMimeType(file.mimeType)) {
+          sourceBuffer = await extractRawEmbeddedPreview(sourceBuffer);
+        }
 
-        // Upload thumbnail to S3
+        // Small thumbnail: grid/list views. 400px wide WebP.
+        // withMetadata() matters here: sharp strips embedded ICC color
+        // profiles by default on any resize/format-conversion pipeline --
+        // without it, a wide-gamut source (Display P3/Adobe RGB, common on
+        // phone and DSLR photos) gets reinterpreted as plain sRGB on
+        // display, which is exactly what "colors don't look right"
+        // live-reported as. Keeping the original profile fixes that.
+        const thumbnailBuffer = await sharp(sourceBuffer)
+          .resize({ width: 400, withoutEnlargement: true })
+          .withMetadata()
+          .webp()
+          .toBuffer();
         await uploadToS3(thumbnailKey, thumbnailBuffer, 'image/webp');
 
-        // Persist the thumbnail key in the DB
+        // Full-size preview: the file-preview modal. Previously the modal's
+        // previewKey ?? thumbnailKey ?? storageKey fallback always fell
+        // through to the 400px thumbnail for every image (previewKey was
+        // never populated) -- so the "preview" was permanently blurry
+        // regardless of the source photo's real resolution. 2000px is large
+        // enough to look sharp on any phone/desktop viewport while staying
+        // far smaller than a multi-megapixel DSLR original.
+        const previewBuffer = await sharp(sourceBuffer)
+          .resize({ width: 2000, withoutEnlargement: true })
+          .withMetadata()
+          .webp({ quality: 85 })
+          .toBuffer();
+        await uploadToS3(previewKey, previewBuffer, 'image/webp');
+
+        // Persist both keys in the DB
         await prisma.file.update({
           where: { id: fileId },
           data: {
             thumbnailKey,
+            previewKey,
             status: 'ACTIVE',
           },
         });
 
-        logger.info('Preview job: thumbnail generated and uploaded', { fileId, thumbnailKey });
+        logger.info('Preview job: thumbnail + preview generated and uploaded', { fileId, thumbnailKey, previewKey });
         return;
       }
     }

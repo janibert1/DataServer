@@ -1,13 +1,31 @@
 import { useState } from 'react';
 import { View, Text, TextInput, KeyboardAvoidingView, Platform, ScrollView, TouchableOpacity } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
-import { useAuthStore } from '@/stores/auth-store';
-import { useLogin, useAuthInit } from '@/lib/hooks/use-auth';
-import { GoogleAuthWebView } from '@/components/auth/google-auth-webview';
-import { Input } from '@/components/ui/input';
-import { Button } from '@/components/ui/button';
+import { LinearGradient } from 'expo-linear-gradient';
+import Svg, { Path } from 'react-native-svg';
+import { Eye, EyeOff, Zap, Lock, AlertCircle } from 'lucide-react-native';
 
+// Same 4-path multi-color "G" as frontend/src/pages/auth/LoginPage.tsx's
+// inline <svg> -- ported directly rather than an image asset, so it's the
+// exact same vector, not a rasterized approximation.
+function GoogleIcon({ size = 18 }: { size?: number }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24">
+      <Path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+      <Path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+      <Path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
+      <Path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+    </Svg>
+  );
+}
+import { useAuthStore } from '@/stores/auth-store';
+import { useLogin } from '@/lib/hooks/use-auth';
+import { GoogleAuthWebView } from '@/components/auth/google-auth-webview';
+
+// Matches frontend/src/pages/auth/LoginPage.tsx exactly -- same copy, same
+// layout, same lucide icon set (via lucide-react-native, not @expo/vector-
+// icons' Ionicons, which don't have matching glyphs) so this renders as
+// close to pixel-identical to the web version as RN's layout engine allows.
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -54,140 +72,165 @@ export default function LoginScreen() {
   }
 
   return (
-    <KeyboardAvoidingView
-      className="flex-1"
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    <LinearGradient
+      colors={['#172554', '#1e3a8a', '#1e40af']}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={{ flex: 1 }}
     >
-      <ScrollView
-        className="flex-1 bg-slate-50"
-        contentContainerClassName="flex-1 justify-center px-6"
-        keyboardShouldPersistTaps="handled"
+      <KeyboardAvoidingView
+        className="flex-1"
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
-        <View className="items-center mb-8">
-          <View className="w-16 h-16 bg-brand-600 rounded-2xl items-center justify-center mb-3">
-            <Ionicons name="cloud-outline" size={32} color="white" />
-          </View>
-          <Text className="text-2xl font-bold text-slate-800">Welcome back</Text>
-          <Text className="text-base text-slate-500 mt-1">Sign in to your account</Text>
-        </View>
-
-        <View className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100">
-          {error ? (
-            <View className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4">
-              <Text className="text-sm text-red-600">{error}</Text>
+        <ScrollView
+          className="flex-1"
+          contentContainerClassName="flex-1 justify-center px-4"
+          keyboardShouldPersistTaps="handled"
+        >
+          <View className="w-full max-w-md self-center">
+            {/* Logo */}
+            <View className="items-center mb-8">
+              <View className="w-14 h-14 rounded-2xl bg-white/10 items-center justify-center mb-4">
+                <Zap size={28} color="white" fill="white" />
+              </View>
+              <Text className="text-2xl font-bold text-white">DataServer</Text>
+              <Text className="text-sm text-brand-300 mt-1">Secure, invitation-only cloud storage</Text>
             </View>
-          ) : null}
 
-          {!needs2FA ? (
-            <>
-              <Input
-                label="Email"
-                placeholder="you@example.com"
-                value={email}
-                onChangeText={setEmail}
-                autoCapitalize="none"
-                autoCorrect={false}
-                keyboardType="email-address"
-                textContentType="emailAddress"
-              />
-              <View className="mb-4">
-                <Text className="text-sm font-medium text-slate-700 mb-1.5">Password</Text>
-                <View className="flex-row items-center border border-slate-300 rounded-lg bg-white px-3.5">
+            {/* Card */}
+            <View className="bg-white rounded-2xl p-8" style={{ shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 24, shadowOffset: { width: 0, height: 12 }, elevation: 8 }}>
+              <View className="mb-6">
+                <View className="flex-row items-center gap-2 self-start bg-brand-50 border border-brand-100 rounded-lg px-3 py-2">
+                  <Lock size={14} color="#1d4ed8" />
+                  <Text className="text-xs text-brand-700">Invitation-only platform</Text>
+                </View>
+                <Text className="text-xl font-bold text-slate-900 mt-4">Sign in to your account</Text>
+              </View>
+
+              {error ? (
+                <View className="flex-row items-center gap-2 px-3 py-2.5 bg-red-50 border border-red-200 rounded-lg mb-5">
+                  <AlertCircle size={16} color="#b91c1c" />
+                  <Text className="text-sm text-red-700 flex-1">{error}</Text>
+                </View>
+              ) : null}
+
+              {!needs2FA ? (
+                <>
+                  <View className="mb-4">
+                    <Text className="text-sm font-medium text-slate-700 mb-1.5">Email</Text>
+                    <TextInput
+                      className="w-full px-3 py-2.5 text-sm border border-slate-300 rounded-lg text-slate-900"
+                      value={email}
+                      onChangeText={setEmail}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      keyboardType="email-address"
+                      textContentType="emailAddress"
+                      placeholder="you@example.com"
+                      placeholderTextColor="#94a3b8"
+                    />
+                  </View>
+                  <View className="mb-4">
+                    <View className="flex-row items-center justify-between mb-1.5">
+                      <Text className="text-sm font-medium text-slate-700">Password</Text>
+                      <TouchableOpacity onPress={() => router.push('/(auth)/forgot-password')}>
+                        <Text className="text-xs text-brand-600 font-medium">Forgot password?</Text>
+                      </TouchableOpacity>
+                    </View>
+                    <View className="flex-row items-center border border-slate-300 rounded-lg px-3">
+                      <TextInput
+                        className="flex-1 py-2.5 text-sm text-slate-900"
+                        value={password}
+                        onChangeText={setPassword}
+                        secureTextEntry={!showPassword}
+                        textContentType="password"
+                        placeholder="Your password"
+                        placeholderTextColor="#94a3b8"
+                        returnKeyType="go"
+                        onSubmitEditing={handleLogin}
+                      />
+                      <TouchableOpacity onPress={() => setShowPassword(!showPassword)}>
+                        {showPassword ? <EyeOff size={16} color="#94a3b8" /> : <Eye size={16} color="#94a3b8" />}
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </>
+              ) : (
+                <View className="mb-4">
+                  <Text className="text-sm font-medium text-slate-700 mb-1.5">Two-factor code</Text>
                   <TextInput
-                    className="flex-1 py-2.5 text-base text-slate-800"
-                    value={password}
-                    onChangeText={setPassword}
-                    secureTextEntry={!showPassword}
-                    textContentType="password"
-                    placeholder="Enter your password"
+                    className="w-full px-3 py-2.5 text-lg font-mono text-center border border-slate-300 rounded-lg text-slate-900"
+                    value={totpCode}
+                    onChangeText={(t) => setTotpCode(t.replace(/\D/g, ''))}
+                    keyboardType="number-pad"
+                    maxLength={6}
+                    placeholder="000000"
                     placeholderTextColor="#94a3b8"
                     returnKeyType="go"
                     onSubmitEditing={handleLogin}
+                    autoFocus
                   />
-                  <TouchableOpacity
-                    onPress={() => setShowPassword(!showPassword)}
-                    className="pl-2"
-                  >
-                    <Ionicons
-                      name={showPassword ? 'eye-off-outline' : 'eye-outline'}
-                      size={20}
-                      color="#94a3b8"
-                    />
+                  <Text className="text-xs text-slate-500 mt-1.5 text-center">
+                    Enter the 6-digit code from your authenticator app
+                  </Text>
+                  <TouchableOpacity onPress={() => setNeeds2FA(false)} className="mt-2">
+                    <Text className="text-xs text-brand-600 font-medium text-center">← Back to login</Text>
                   </TouchableOpacity>
                 </View>
-              </View>
-            </>
-          ) : (
-            <Input
-              label="Two-Factor Code"
-              placeholder="Enter 6-digit code"
-              value={totpCode}
-              onChangeText={setTotpCode}
-              keyboardType="number-pad"
-              maxLength={6}
-              returnKeyType="go"
-              onSubmitEditing={handleLogin}
-            />
-          )}
+              )}
 
-          <Button
-            title={needs2FA ? 'Verify' : 'Sign In'}
-            onPress={handleLogin}
-            loading={loginMutation.isPending}
-            className="mt-1"
-          />
-
-          {!needs2FA && (
-            <>
-              <View className="flex-row items-center my-5">
-                <View className="flex-1 h-px bg-slate-200" />
-                <Text className="mx-3 text-sm text-slate-400">or</Text>
-                <View className="flex-1 h-px bg-slate-200" />
-              </View>
-
-              <Button
-                variant="secondary"
-                title="Continue with Google"
-                onPress={handleGoogleLogin}
-                icon={<Ionicons name="logo-google" size={18} color="#475569" className="mr-2" />}
-              />
-            </>
-          )}
-        </View>
-
-        <View className="flex-row justify-center gap-4 mt-6">
-          {!needs2FA && (
-            <>
-              <TouchableOpacity onPress={() => router.push('/(auth)/register')}>
-                <Text className="text-sm text-brand-600 font-medium">Create account</Text>
+              <TouchableOpacity
+                onPress={handleLogin}
+                disabled={loginMutation.isPending}
+                className={`w-full py-2.5 bg-brand-600 rounded-lg items-center ${loginMutation.isPending ? 'opacity-60' : ''}`}
+              >
+                <Text className="text-white text-sm font-semibold">
+                  {loginMutation.isPending ? 'Signing in…' : needs2FA ? 'Verify' : 'Sign in'}
+                </Text>
               </TouchableOpacity>
-              <Text className="text-slate-300">|</Text>
-              <TouchableOpacity onPress={() => router.push('/(auth)/forgot-password')}>
-                <Text className="text-sm text-brand-600 font-medium">Forgot password?</Text>
-              </TouchableOpacity>
-            </>
-          )}
-          {needs2FA && (
-            <TouchableOpacity onPress={() => setNeeds2FA(false)}>
-              <Text className="text-sm text-brand-600 font-medium">Back to login</Text>
+
+              {!needs2FA && (
+                <>
+                  <View className="flex-row items-center gap-3 my-5">
+                    <View className="flex-1 h-px bg-slate-200" />
+                    <Text className="text-xs text-slate-400 font-medium">or</Text>
+                    <View className="flex-1 h-px bg-slate-200" />
+                  </View>
+
+                  <TouchableOpacity
+                    onPress={handleGoogleLogin}
+                    className="flex-row items-center justify-center gap-3 w-full py-2.5 border border-slate-300 rounded-lg"
+                  >
+                    <GoogleIcon size={18} />
+                    <Text className="text-sm font-medium text-slate-700">Continue with Google</Text>
+                  </TouchableOpacity>
+
+                  <View className="flex-row justify-center flex-wrap mt-5">
+                    <Text className="text-center text-xs text-slate-500">Don't have an account? </Text>
+                    <TouchableOpacity onPress={() => router.push('/(auth)/register')}>
+                      <Text className="text-xs text-brand-600 font-medium">Register with an invitation code</Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              )}
+            </View>
+
+            <TouchableOpacity
+              onPress={() => {
+                useAuthStore.getState().setServerUrl(null);
+                router.replace('/(auth)/server-url');
+              }}
+              className="mt-4 items-center"
+            >
+              <Text className="text-xs text-brand-300/70">Change server</Text>
             </TouchableOpacity>
-          )}
-        </View>
-
-        <TouchableOpacity
-          onPress={() => {
-            useAuthStore.getState().setServerUrl(null);
-            router.replace('/(auth)/server-url');
-          }}
-          className="mt-4 items-center"
-        >
-          <Text className="text-xs text-slate-400">Change server</Text>
-        </TouchableOpacity>
-      </ScrollView>
-      <GoogleAuthWebView
-        visible={googleAuthVisible}
-        onClose={() => setGoogleAuthVisible(false)}
-      />
-    </KeyboardAvoidingView>
+          </View>
+        </ScrollView>
+        <GoogleAuthWebView
+          visible={googleAuthVisible}
+          onClose={() => setGoogleAuthVisible(false)}
+        />
+      </KeyboardAvoidingView>
+    </LinearGradient>
   );
 }

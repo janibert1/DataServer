@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, LogBox, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -59,7 +60,7 @@ const queryClient = new QueryClient({
 });
 
 function AuthGate({ children }: { children: React.ReactNode }) {
-  const { serverUrl, user, isLoading, loadServerUrl, setLoading } = useAuthStore();
+  const { serverUrl, user, isLoading, loadServerUrl, loadApiToken, setLoading } = useAuthStore();
   const [urlLoaded, setUrlLoaded] = useState(false);
   const segments = useSegments();
   const router = useRouter();
@@ -67,7 +68,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   useAuthInit();
 
   useEffect(() => {
-    loadServerUrl().then(() => setUrlLoaded(true));
+    Promise.all([loadServerUrl(), loadApiToken()]).then(() => setUrlLoaded(true));
   }, []);
 
   // When there's no serverUrl, the auth query is disabled and will never run,
@@ -106,13 +107,21 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
+      {/* App-wide safe-area insets. Without this, any screen or modal using
+          SafeAreaView/useSafeAreaInsets that doesn't defensively wrap itself
+          falls back to zero insets -- confirmed live on a real notched
+          phone (GoogleAuthWebView's header rendered under the status bar
+          clock). file-preview.tsx's own nested SafeAreaProvider is now
+          redundant but harmless -- nesting just recomputes from the same
+          real native insets. */}
+      <SafeAreaProvider>
       <QueryClientProvider client={queryClient}>
         <AuthGate>
           <View style={{ flex: 1 }}>
             <Stack screenOptions={{ headerShown: false }}>
               <Stack.Screen name="(auth)" />
               <Stack.Screen name="(tabs)" />
-              <Stack.Screen name="folder/[id]" options={{ headerShown: true, title: '' }} />
+              <Stack.Screen name="folder/[id]" options={{ headerShown: false }} />
               <Stack.Screen name="file-preview" options={{ presentation: 'fullScreenModal' }} />
               <Stack.Screen name="settings" options={{ headerShown: false }} />
             </Stack>
@@ -122,6 +131,7 @@ export default function RootLayout() {
         <StatusBar style="dark" />
         <Toast />
       </QueryClientProvider>
+      </SafeAreaProvider>
     </GestureHandlerRootView>
   );
 }

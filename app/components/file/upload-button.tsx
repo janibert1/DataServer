@@ -1,6 +1,6 @@
-import { Alert } from 'react-native';
+import { Alert, Text, View } from 'react-native';
 import { TouchableOpacity } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { Plus, Upload } from 'lucide-react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
@@ -9,9 +9,15 @@ import { useUploadFiles } from '@/lib/hooks/use-upload';
 interface UploadButtonProps {
   folderId?: string;
   onCreateFolder?: () => void;
+  // 'fab': the floating round button (Sidebar's own upload-only entry point
+  // in the web design lives inline there, but some screens still want a
+  // floating add button -- kept as an option). 'inline': a normal labeled
+  // button, used in the Sidebar and in each page's header row, matching
+  // web's blue "Upload" button there.
+  variant?: 'fab' | 'inline';
 }
 
-export function UploadButton({ folderId, onCreateFolder }: UploadButtonProps) {
+export function UploadButton({ folderId, onCreateFolder, variant = 'fab' }: UploadButtonProps) {
   const uploadMutation = useUploadFiles(folderId);
 
   function handlePress() {
@@ -95,6 +101,19 @@ export function UploadButton({ folderId, onCreateFolder }: UploadButtonProps) {
     }
   }
 
+  if (variant === 'inline') {
+    return (
+      <TouchableOpacity
+        onPress={handlePress}
+        className="flex-row items-center justify-center gap-2 px-3 py-2.5 bg-brand-600 rounded-lg"
+        activeOpacity={0.8}
+      >
+        <Upload size={16} color="white" />
+        <Text className="text-sm font-semibold text-white">Upload</Text>
+      </TouchableOpacity>
+    );
+  }
+
   return (
     <TouchableOpacity
       onPress={handlePress}
@@ -116,7 +135,7 @@ export function UploadButton({ folderId, onCreateFolder }: UploadButtonProps) {
       }}
       activeOpacity={0.8}
     >
-      <Ionicons name="add" size={28} color="white" />
+      <Plus size={28} color="white" />
     </TouchableOpacity>
   );
 }

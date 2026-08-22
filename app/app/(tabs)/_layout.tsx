@@ -1,115 +1,13 @@
-import { Tabs, useRouter } from 'expo-router';
-import { TouchableOpacity, View, Text } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
-import { useAuthStore } from '@/stores/auth-store';
-import { useUploadStore } from '@/stores/upload-store';
-import { useDownloadStore } from '@/stores/download-store';
-import { Avatar } from '@/components/ui/avatar';
+import { Stack } from 'expo-router';
 
-function HeaderRight() {
-  const router = useRouter();
-  const { user } = useAuthStore();
-  const { uploads, setVisible: setUploadVisible } = useUploadStore();
-  const { downloads, setVisible: setDownloadVisible } = useDownloadStore();
-  const activeUploads = uploads.filter((u) => u.status === 'uploading' || u.status === 'pending').length;
-  const activeDownloads = downloads.filter((d) => d.status === 'downloading' || d.status === 'pending').length;
-
-  return (
-    <View className="flex-row items-center gap-3 mr-4">
-      <TouchableOpacity
-        onPress={() => setDownloadVisible(true)}
-        className="relative"
-      >
-        {activeDownloads > 0 && (
-          <View className="absolute -top-1 -right-1 bg-green-500 rounded-full w-4 h-4 items-center justify-center z-10">
-            <Text className="text-[10px] text-white font-bold">{activeDownloads > 9 ? '9+' : activeDownloads}</Text>
-          </View>
-        )}
-        <Ionicons name="cloud-download-outline" size={22} color="#475569" />
-      </TouchableOpacity>
-      <TouchableOpacity
-        onPress={() => setUploadVisible(true)}
-        className="relative"
-      >
-        {activeUploads > 0 && (
-          <View className="absolute -top-1 -right-1 bg-blue-500 rounded-full w-4 h-4 items-center justify-center z-10">
-            <Text className="text-[10px] text-white font-bold">{activeUploads > 9 ? '9+' : activeUploads}</Text>
-          </View>
-        )}
-        <Ionicons name="cloud-upload-outline" size={22} color="#475569" />
-      </TouchableOpacity>
-      <TouchableOpacity onPress={() => router.push('/settings')}>
-        <Avatar url={user?.avatarUrl} name={user?.displayName ?? ''} size={30} />
-      </TouchableOpacity>
-    </View>
-  );
-}
-
-export default function TabLayout() {
-  return (
-    <Tabs
-      screenOptions={{
-        tabBarActiveTintColor: '#2563eb',
-        tabBarInactiveTintColor: '#94a3b8',
-        tabBarStyle: { borderTopColor: '#e2e8f0' },
-        headerStyle: { backgroundColor: '#ffffff' },
-        headerTitleStyle: { fontWeight: '600', color: '#1e293b' },
-        headerShadowVisible: false,
-        headerRight: () => <HeaderRight />,
-        tabBarButton: ({ style, children, onPress, accessibilityRole, accessibilityState, testID }) => (
-          <TouchableOpacity
-            style={style}
-            onPress={(e) => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              onPress?.(e);
-            }}
-            accessibilityRole={accessibilityRole}
-            accessibilityState={accessibilityState ?? undefined}
-            testID={testID ?? undefined}
-            activeOpacity={0.7}
-          >
-            {children}
-          </TouchableOpacity>
-        ),
-      }}
-    >
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: 'My Drive',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="folder-outline" size={size} color={color} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="starred"
-        options={{
-          title: 'Starred',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="star-outline" size={size} color={color} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="shared"
-        options={{
-          title: 'Shared',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="people-outline" size={size} color={color} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="trash"
-        options={{
-          title: 'Trash',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="trash-outline" size={size} color={color} />
-          ),
-        }}
-      />
-    </Tabs>
-  );
+// Was a bottom-tab navigator (My Drive / Starred / Shared / Trash). Replaced
+// with a plain stack -- navigation chrome (hamburger + sidebar drawer with
+// all 8 sections, search, notifications, user menu) now lives in
+// components/layout/DriveShell.tsx, rendered by each screen individually,
+// matching frontend/src/components/layout/DriveLayout.tsx's structure
+// instead of a native tab bar (see auto-memory project_dataserver.md for why
+// -- Jan asked for literal web parity here, not the idiomatic-mobile
+// alternative).
+export default function TabsLayout() {
+  return <Stack screenOptions={{ headerShown: false }} />;
 }

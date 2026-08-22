@@ -7,11 +7,14 @@ import { logger } from '../lib/logger';
 
 export const tokensRouter = Router();
 
-function generateToken(): string {
+// Exported for the mobile Google OAuth handoff (see routes/auth.ts) -- same
+// token format/hashing used everywhere else a client needs Bearer auth
+// instead of a cookie, not a separate scheme.
+export function generateToken(): string {
   return 'ds_' + crypto.randomBytes(24).toString('hex');
 }
 
-function hashToken(token: string): string {
+export function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 

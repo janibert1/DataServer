@@ -3,6 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { useAuthStore } from '@/stores/auth-store';
+import { DriveShell } from '@/components/layout/drive-shell';
 import { useChangePassword, useSetup2FA, useVerify2FA, useDisable2FA } from '@/lib/hooks/use-auth';
 import { useSessions, useRevokeSession, useSecurityEvents } from '@/lib/hooks/use-account';
 import { Input } from '@/components/ui/input';
@@ -18,13 +19,16 @@ export default function SecurityScreen() {
   const isGoogle = user?.authProvider === 'GOOGLE';
 
   return (
-    <ScrollView className="flex-1 bg-slate-50" contentContainerClassName="p-4 gap-4">
-      {!isGoogle && <ChangePasswordSection />}
-      <TwoFactorSection />
-      <SessionsSection />
-      <SecurityEventsSection />
-      <View className="h-8" />
-    </ScrollView>
+    <DriveShell>
+      <ScrollView className="flex-1 bg-slate-50" contentContainerClassName="p-4 gap-4">
+        <Text className="text-xl font-bold text-slate-900">Security</Text>
+        {!isGoogle && <ChangePasswordSection />}
+        <TwoFactorSection />
+        <SessionsSection />
+        <SecurityEventsSection />
+        <View className="h-8" />
+      </ScrollView>
+    </DriveShell>
   );
 }
 

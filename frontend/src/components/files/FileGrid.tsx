@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Star, Share2, MoreVertical, Folder } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import clsx from 'clsx';
@@ -6,7 +6,7 @@ import { DriveFile, DriveFolder } from '../../types';
 import { FileIcon } from './FileIcon';
 import { FileContextMenu } from './FileContextMenu';
 import { formatBytes } from '../../lib/format';
-import { getFilePreviewUrl } from '../../hooks/useFiles';
+import { getFileThumbnailUrl } from '../../hooks/useFiles';
 
 // /api/files/:id/preview returns JSON ({ previewUrl, mimeType }), not image
 // bytes -- pointing an <img> src directly at it (the previous behavior) never
@@ -16,27 +16,62 @@ import { getFilePreviewUrl } from '../../hooks/useFiles';
 function Thumbnail({ fileId, mimeType, alt }: { fileId: string; mimeType: string; alt: string }) {
   const [src, setSrc] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
+  const [inView, setInView] = useState(false);
+  const elRef = useRef<HTMLDivElement>(null);
+
+  // Gate the signed-URL fetch on actual (near-)visibility, not mount --
+  // opening a folder with hundreds/thousands of files otherwise fires that
+  // many API calls all at once regardless of what's on screen. Native
+  // `loading="lazy"` on the <img> below only defers the image *byte* fetch,
+  // not this call that resolves its src in the first place.
+  useEffect(() => {
+    const el = elRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setInView(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '600px' } // start loading well before it actually scrolls into frame
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
+    if (!inView) return;
     let cancelled = false;
-    getFilePreviewUrl(fileId)
-      .then((data) => { if (!cancelled) setSrc(data.previewUrl); })
+    getFileThumbnailUrl(fileId)
+      .then((data) => { if (!cancelled) setSrc(data.thumbnailUrl); })
       .catch(() => { if (!cancelled) setFailed(true); });
     return () => { cancelled = true; };
-  }, [fileId]);
-
-  // Fall back to the generic file icon while loading and on any failure,
-  // instead of leaving the card blank.
-  if (failed || !src) return <FileIcon mimeType={mimeType} className="w-14 h-14" size={28} />;
+  }, [fileId, inView]);
 
   return (
-    <img
-      src={src}
-      alt={alt}
-      className="w-full h-full object-cover"
-      loading="lazy"
-      onError={() => setFailed(true)}
-    />
+    <div ref={elRef} className="w-full h-full">
+      {failed || (!src && !inView) ? (
+        // Generic icon: permanent failure, or just not near the viewport yet
+        // (same look either way -- indistinguishable and that's fine, this
+        // state is normally never even seen since it clears the instant a
+        // tile scrolls close).
+        <FileIcon mimeType={mimeType} className="w-14 h-14" size={28} />
+      ) : !src ? (
+        // Actually in view and the request is in flight -- a real loading
+        // signal distinct from both the icon above and the finished photo,
+        // so it doesn't read as "broken" while waiting on a slow request.
+        <div className="w-full h-full animate-pulse bg-slate-200" />
+      ) : (
+        <img
+          src={src}
+          alt={alt}
+          className="w-full h-full object-cover"
+          loading="lazy"
+          onError={() => setFailed(true)}
+        />
+      )}
+    </div>
   );
 }
 

@@ -1,12 +1,14 @@
 import { useState, useCallback } from 'react';
-import { View, Text, ScrollView, TouchableOpacity } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, Modal, TextInput, Pressable } from 'react-native';
 import { useRouter } from 'expo-router';
+import { FolderPlus, Sparkles, Clock, X } from 'lucide-react-native';
 import { useFiles, useRecentFiles, useStarFile, useTrashFile } from '@/lib/hooks/use-files';
 import { useFolders, useStarFolder, useTrashFolder } from '@/lib/hooks/use-folders';
+import { useAiSort, useAiSortStatus } from '@/lib/hooks/use-ai-sort';
 import { useUIStore } from '@/stores/ui-store';
+import { DriveShell } from '@/components/layout/drive-shell';
 import { FileList } from '@/components/file/file-list';
 import { SortControls } from '@/components/file/sort-controls';
-import { SearchBar } from '@/components/ui/search-bar';
 import { UploadButton } from '@/components/file/upload-button';
 import { CreateFolderModal } from '@/components/file/create-folder-modal';
 import { RenameModal } from '@/components/file/rename-modal';
@@ -18,9 +20,59 @@ import { useMoveFile } from '@/lib/hooks/use-files';
 import { useMoveFolder, useCreateFolder } from '@/lib/hooks/use-folders';
 import type { DriveFile, DriveFolder } from '@/lib/types';
 
+// Matches frontend/src/pages/drive/MyDrivePage.tsx's header row (New folder
+// / AI Sort / Upload buttons) and Quick access section -- the rest of that
+// page's bulk-select/drag-drop UI is web-desktop-specific and has no direct
+// mobile equivalent, skipped rather than force-fit.
+function AiSortModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+  const [prompt, setPrompt] = useState('');
+  const aiSort = useAiSort();
+
+  function handleStart() {
+    aiSort.mutate({ prompt: prompt.trim() || undefined }, { onSuccess: onClose });
+  }
+
+  return (
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+      <Pressable className="flex-1 bg-black/40 justify-end" onPress={onClose}>
+        <Pressable className="bg-white rounded-t-2xl p-6" onPress={(e) => e.stopPropagation()}>
+          <View className="flex-row items-center justify-between mb-4">
+            <View className="flex-row items-center gap-2">
+              <Sparkles size={18} color="#7c3aed" />
+              <Text className="text-lg font-bold text-slate-900">AI Sort</Text>
+            </View>
+            <TouchableOpacity onPress={onClose}>
+              <X size={20} color="#94a3b8" />
+            </TouchableOpacity>
+          </View>
+          <Text className="text-sm text-slate-500 mb-4">
+            AI will organize your files into folders. Optionally tell it how you'd like things sorted.
+          </Text>
+          <TextInput
+            className="w-full px-3 py-2.5 text-sm border border-slate-300 rounded-lg text-slate-900 mb-4"
+            value={prompt}
+            onChangeText={setPrompt}
+            placeholder="e.g. group by date and file type"
+            placeholderTextColor="#94a3b8"
+            multiline
+          />
+          <TouchableOpacity
+            onPress={handleStart}
+            disabled={aiSort.isPending}
+            className={`w-full py-2.5 bg-violet-600 rounded-lg items-center ${aiSort.isPending ? 'opacity-60' : ''}`}
+          >
+            <Text className="text-white text-sm font-semibold">{aiSort.isPending ? 'Starting…' : 'Start sorting'}</Text>
+          </TouchableOpacity>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
 export default function MyDriveScreen() {
   const [search, setSearch] = useState('');
   const [createFolderVisible, setCreateFolderVisible] = useState(false);
+  const [aiSortVisible, setAiSortVisible] = useState(false);
   const [renameItem, setRenameItem] = useState<{ id: string; name: string; type: 'file' | 'folder' } | null>(null);
   const [autoCreateFolder, setAutoCreateFolder] = useState<{ dragged: DragItem; target: DragItem } | null>(null);
   const moveFileMut = useMoveFile();
@@ -36,6 +88,7 @@ export default function MyDriveScreen() {
     sortDir: sortDirection,
   });
   const { data: recentData } = useRecentFiles();
+  const { data: aiSortStatus } = useAiSortStatus();
 
   const starFile = useStarFile();
   const trashFile = useTrashFile();
@@ -78,13 +131,39 @@ export default function MyDriveScreen() {
 
   const header = (
     <View>
-      <View className="px-4 py-3">
-        <SearchBar value={search} onChangeText={setSearch} />
+      <View className="flex-row items-center justify-between gap-3 px-4 pt-4 pb-3">
+        <Text className="text-xl font-bold text-slate-900">My Drive</Text>
+        <View className="flex-row items-center gap-2">
+          <TouchableOpacity
+            onPress={() => setCreateFolderVisible(true)}
+            className="flex-row items-center gap-1.5 px-3 py-2 border border-slate-300 rounded-lg"
+          >
+            <FolderPlus size={15} color="#334155" />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => setAiSortVisible(true)}
+            disabled={aiSortStatus?.status === 'processing'}
+            className={`flex-row items-center gap-1.5 px-3 py-2 bg-violet-50 border border-violet-200 rounded-lg ${aiSortStatus?.status === 'processing' ? 'opacity-50' : ''}`}
+          >
+            <Sparkles size={15} color="#6d28d9" />
+          </TouchableOpacity>
+          <UploadButton variant="inline" folderId={undefined} />
+        </View>
       </View>
+
+      {aiSortStatus?.status === 'processing' && (
+        <View className="flex-row items-center gap-3 mx-4 mb-3 px-4 py-3 bg-violet-50 border border-violet-200 rounded-xl">
+          <Sparkles size={16} color="#8b5cf6" />
+          <Text className="text-sm font-medium text-violet-800 flex-1">AI is sorting your files… You'll be notified when done.</Text>
+        </View>
+      )}
 
       {!search && recentFiles.length > 0 && (
         <View className="mb-2">
-          <Text className="text-sm font-semibold text-slate-600 px-4 mb-2">Quick Access</Text>
+          <View className="flex-row items-center gap-2 px-4 mb-2">
+            <Clock size={14} color="#94a3b8" />
+            <Text className="text-sm font-semibold text-slate-700">Quick access</Text>
+          </View>
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
@@ -135,31 +214,31 @@ export default function MyDriveScreen() {
 
   return (
     <DragDropProvider onDropOnFolder={handleDropOnFolder} onDropOnItem={handleDropOnItem}>
-    <View className="flex-1 bg-slate-50">
-      <FileList
-        folders={search ? [] : folders}
-        files={files}
-        viewMode={viewMode}
-        refreshing={refreshing}
-        onRefresh={handleRefresh}
-        onFilePress={handleFilePress}
-        onFileMorePress={handleFileActions}
-        onFolderMorePress={handleFolderActions}
-        emptyTitle="Your drive is empty"
-        emptyDescription="Upload files to get started"
-        emptyIcon="cloud-upload-outline"
-        ListHeaderComponent={header}
-      />
-      <UploadButton onCreateFolder={() => setCreateFolderVisible(true)} />
-      <CreateFolderModal visible={createFolderVisible} onClose={() => setCreateFolderVisible(false)} />
-      <RenameModal visible={!!renameItem} onClose={() => setRenameItem(null)} item={renameItem} />
-      <AutoCreateFolderModal
-        visible={!!autoCreateFolder}
-        onClose={() => setAutoCreateFolder(null)}
-        onConfirm={handleAutoCreateFolder}
-        isPending={createFolderMut.isPending}
-      />
-    </View>
+      <DriveShell search={search} onSearchChange={setSearch}>
+        <FileList
+          folders={search ? [] : folders}
+          files={files}
+          viewMode={viewMode}
+          refreshing={refreshing}
+          onRefresh={handleRefresh}
+          onFilePress={handleFilePress}
+          onFileMorePress={handleFileActions}
+          onFolderMorePress={handleFolderActions}
+          emptyTitle="Your drive is empty"
+          emptyDescription="Upload files to get started"
+          emptyIcon="cloud-upload-outline"
+          ListHeaderComponent={header}
+        />
+        <CreateFolderModal visible={createFolderVisible} onClose={() => setCreateFolderVisible(false)} />
+        <AiSortModal visible={aiSortVisible} onClose={() => setAiSortVisible(false)} />
+        <RenameModal visible={!!renameItem} onClose={() => setRenameItem(null)} item={renameItem} />
+        <AutoCreateFolderModal
+          visible={!!autoCreateFolder}
+          onClose={() => setAutoCreateFolder(null)}
+          onConfirm={handleAutoCreateFolder}
+          isPending={createFolderMut.isPending}
+        />
+      </DriveShell>
     </DragDropProvider>
   );
 }

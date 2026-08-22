@@ -8,8 +8,8 @@ export interface User {
   emailVerified: boolean;
   twoFactorEnabled: boolean;
   authProvider: 'LOCAL' | 'GOOGLE';
-  storageUsed: number;
-  storageQuota: number;
+  storageUsedBytes: string;
+  storageQuotaBytes: string;
   createdAt: string;
   lastLoginAt: string | null;
 }
@@ -101,9 +101,8 @@ export interface Invitation {
 
 export interface StorageInfo {
   used: number;
-  quota: number;
-  available: number;
-  percentage: number;
+  total: number;
+  percent: number;
 }
 
 export interface Session {

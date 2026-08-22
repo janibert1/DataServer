@@ -41,9 +41,20 @@ export function createApp() {
   );
 
   // ─── CORS ────────────────────────────────────────────────────
+  // FRONTEND_URL can be a comma-separated list -- lets the Expo dev server
+  // (react-native-web, a different origin/port than the deployed SPA) talk
+  // to this same backend during mobile-app development, without opening
+  // CORS up wide. Single-origin deployments are unaffected either way.
+  const allowedOrigins = config.frontendUrl.split(',').map((o) => o.trim()).filter(Boolean);
   app.use(
     cors({
-      origin: config.frontendUrl,
+      origin: (origin, callback) => {
+        if (!origin || allowedOrigins.includes(origin)) {
+          callback(null, true);
+        } else {
+          callback(new Error(`Origin ${origin} not allowed by CORS`));
+        }
+      },
       credentials: true,
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
       allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token'],
@@ -83,7 +94,19 @@ export function createApp() {
       cookie: {
         httpOnly: true,
         secure: config.cookieSecure,
-        sameSite: 'lax',
+        // 'none' requires Secure, so this can only ever be 'none' when
+        // cookieSecure is already true -- otherwise browsers just drop the
+        // cookie outright, so 'lax' stays the (best-effort, same-origin-only)
+        // fallback for a plain-HTTP deployment. Any real deployment of this
+        // app's web build (react-native-web) or a native app's web-mode dev
+        // server is, by definition, a different origin than the API -- 'lax'
+        // cookies are simply never sent on cross-site fetch()/XHR at all
+        // (only top-level navigations), so 'lax' here silently breaks every
+        // API call for any such client while looking like a normal 401.
+        // CORS's origin allowlist (see below) is what actually gates who's
+        // trusted, same as before -- this only changes whether an already-
+        // allowed cross-origin client's cookie gets sent.
+        sameSite: config.cookieSecure ? 'none' : 'lax',
         maxAge: config.session.maxAgeMs,
       },
     })

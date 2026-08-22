@@ -1,19 +1,18 @@
 import { View, Text } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useStarredFiles, useStarFile, useTrashFile } from '@/lib/hooks/use-files';
+import { useRecentFiles, useStarFile, useTrashFile } from '@/lib/hooks/use-files';
 import { useUIStore } from '@/stores/ui-store';
 import { DriveShell } from '@/components/layout/drive-shell';
 import { FileList } from '@/components/file/file-list';
-import { SortControls } from '@/components/file/sort-controls';
 import { showFileActions } from '@/components/file/file-actions';
 import { downloadAndShareFile } from '@/lib/hooks/use-download';
 import type { DriveFile } from '@/lib/types';
 
-// Matches frontend/src/pages/drive/StarredPage.tsx.
-export default function StarredScreen() {
+// Matches frontend/src/pages/drive/RecentPage.tsx.
+export default function RecentScreen() {
   const { viewMode } = useUIStore();
   const router = useRouter();
-  const { data, refetch, isRefetching } = useStarredFiles();
+  const { data, isRefetching, refetch } = useRecentFiles();
   const starFile = useStarFile();
   const trashFile = useTrashFile();
   const files = data?.files ?? [];
@@ -32,10 +31,7 @@ export default function StarredScreen() {
   }
 
   const header = (
-    <View>
-      <Text className="text-xl font-bold text-slate-900 px-4 pt-4 pb-3">Starred</Text>
-      <SortControls />
-    </View>
+    <Text className="text-xl font-bold text-slate-900 px-4 pt-4 pb-3">Recent</Text>
   );
 
   return (
@@ -48,9 +44,9 @@ export default function StarredScreen() {
         onRefresh={refetch}
         onFilePress={handleFilePress}
         onFileMorePress={handleFileActions}
-        emptyTitle="No starred items"
-        emptyDescription="Star files and folders for quick access"
-        emptyIcon="star-outline"
+        emptyTitle="No recent files"
+        emptyDescription="Files you've recently accessed or modified will appear here"
+        emptyIcon="time-outline"
         ListHeaderComponent={header}
       />
     </DriveShell>

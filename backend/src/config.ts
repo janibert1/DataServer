@@ -23,7 +23,19 @@ export const config = {
   port: optionalInt('PORT', 4000),
   isDev: optional('NODE_ENV', 'development') !== 'production',
 
+  // FRONTEND_URL may be a comma-separated list of allowed CORS origins
+  // (see app.ts's allowedOrigins, which splits on comma) -- frontendUrl
+  // keeps the raw value for that purpose. Every user-facing link this
+  // backend builds (password reset, email verification, invitation,
+  // folder-share notification, Google OAuth redirect) needs exactly ONE
+  // canonical URL, not that raw multi-value string -- publicUrl is always
+  // just the first entry, trimmed, so a single-origin FRONTEND_URL keeps
+  // working unchanged and a comma-separated one degrades to "the first/
+  // primary one" instead of silently building a broken multi-origin link.
   frontendUrl: optional('FRONTEND_URL', 'http://localhost:5173'),
+  get publicUrl() {
+    return this.frontendUrl.split(',')[0].trim();
+  },
   cookieSecure: optional('COOKIE_SECURE', '') === 'true',
 
   database: {

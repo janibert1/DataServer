@@ -1,9 +1,9 @@
-import { Fragment, useState, useEffect, useRef } from 'react';
+import { Fragment, useState, useEffect, useRef, WheelEvent, MouseEvent, PointerEvent as ReactPointerEvent } from 'react';
 import { Dialog, Transition } from '@headlessui/react';
-import { X, Download, ChevronLeft, ChevronRight, ExternalLink, Info } from 'lucide-react';
+import { X, Download, ChevronLeft, ChevronRight, ExternalLink, Info, Maximize2, Minimize2, ZoomIn, ZoomOut } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { DriveFile } from '../../types';
-import { getFileDownloadUrl, getFilePreviewUrl } from '../../hooks/useFiles';
+import { getFileDownloadUrl, getFilePreviewUrl, getFileThumbnailUrl, getFileOriginalUrl } from '../../hooks/useFiles';
 import { LoadingSpinner } from '../common/LoadingSpinner';
 import clsx from 'clsx';
 import { formatBytes } from '../../lib/format';
@@ -49,18 +49,337 @@ function VideoPlayer({ previewUrl }: { previewUrl: string }) {
   );
 }
 
-function PreviewContent({ file, previewUrl }: { file: DriveFile; previewUrl: string }) {
+// Shows the small thumbnail immediately (already resolved by the time the
+// modal opens most of the time -- FileGrid fetched it for the tile), then
+// swaps to the full-resolution preview once it loads. Deliberately a single
+// <img> element whose `src` is mutated in place rather than two elements or
+// a remount keyed on load state -- if the visitor has already pinch-zoomed
+// the low-res image, the browser's zoom/pan transform lives on that DOM
+// node, and only survives the quality swap if the node itself never changes.
+const MIN_SCALE = 1;
+const MAX_SCALE = 6;
+const DOUBLE_TAP_SCALE = 2.5;
+
+function clamp(n: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, n));
+}
+
+function dist(a: PointerEvent, b: PointerEvent) {
+  return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+}
+
+function ProgressiveImage({ fileId, fullUrl, quality, alt, fullscreen }: { fileId: string; fullUrl: string; quality: 'thumbnail' | 'preview' | 'original' | null; alt: string; fullscreen: boolean }) {
+  // fullUrl is already resolved by the parent's effect (that's why this
+  // component exists at all) -- only the thumbnail needs its own fetch here.
+  const [src, setSrc] = useState<string | null>(null);
+
+  // True once the actual, unprocessed original file (not the 2000px/q85
+  // WebP re-encode previewKey produces) is what's on screen -- see the
+  // fullUrl effect below for the 3-stage progressive load this drives.
+  const [isOriginal, setIsOriginal] = useState(false);
+
+  // Every tier (thumbnail/preview/original) shares the same aspect ratio but
+  // has wildly different intrinsic pixel dimensions -- with no explicit box
+  // size, the <img> naturally resizes itself larger on every quality
+  // upgrade (400px wide -> 2000px -> the real original), which reads as the
+  // photo visibly jumping in physical size mid-transition. Locking a pixel
+  // box the first time any tier loads, from whichever container space is
+  // available right then, keeps every later swap purely a quality change.
+  const [boxSize, setBoxSize] = useState<{ w: number; h: number } | null>(null);
+  const naturalDimsRef = useRef<{ w: number; h: number } | null>(null);
+
+  const lockBoxSize = (naturalW: number, naturalH: number) => {
+    naturalDimsRef.current = { w: naturalW, h: naturalH };
+    const container = containerRef.current;
+    if (!container) return;
+    const availW = container.clientWidth;
+    const availH = container.clientHeight;
+    const ratio = naturalW / naturalH;
+    let w = availW;
+    let h = availW / ratio;
+    if (h > availH) {
+      h = availH;
+      w = availH * ratio;
+    }
+    setBoxSize({ w, h });
+  };
+
+  // Pan/zoom state. Deliberately plain refs+manual style writes (not React
+  // state) for the per-frame transform -- pointermove fires far faster than
+  // a comfortable React re-render rate, and this avoids fighting React over
+  // who owns the transform during an active drag/pinch.
+  const containerRef = useRef<HTMLDivElement>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
+  const scaleRef = useRef(1);
+  const posRef = useRef({ x: 0, y: 0 });
+  const [scale, setScale] = useState(1); // mirrored into state only to drive the zoom-controls UI
+
+  const pointers = useRef(new Map<number, PointerEvent>());
+  const pinchStartDist = useRef<number | null>(null);
+  const pinchStartScale = useRef(1);
+  const dragStart = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
+
+  // Fades in on any zoom action, back out after a second of no further
+  // zooming (not panning -- per spec this tracks zoom activity specifically).
+  const [controlsVisible, setControlsVisible] = useState(false);
+  const hideControlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const bumpControls = () => {
+    setControlsVisible(true);
+    if (hideControlsTimer.current) clearTimeout(hideControlsTimer.current);
+    hideControlsTimer.current = setTimeout(() => setControlsVisible(false), 1000);
+  };
+  useEffect(() => () => { if (hideControlsTimer.current) clearTimeout(hideControlsTimer.current); }, []);
+
+  // Keeps the pan position from ever revealing empty space past the image's
+  // own (scaled) edges -- without this, a drag at high zoom can push the
+  // whole image out of the viewport with no way back short of the reset button.
+  const clampPos = (s: number) => {
+    const img = imgRef.current;
+    const container = containerRef.current;
+    if (!img || !container) return;
+    const scaledW = img.offsetWidth * s;
+    const scaledH = img.offsetHeight * s;
+    const rect = container.getBoundingClientRect();
+    const maxX = Math.max(0, (scaledW - rect.width) / 2);
+    const maxY = Math.max(0, (scaledH - rect.height) / 2);
+    posRef.current = {
+      x: clamp(posRef.current.x, -maxX, maxX),
+      y: clamp(posRef.current.y, -maxY, maxY),
+    };
+  };
+
+  const applyTransform = (animate = false) => {
+    const el = imgRef.current;
+    if (!el) return;
+    el.style.transition = animate ? 'transform 0.2s ease-out' : 'none';
+    el.style.transform = `translate(${posRef.current.x}px, ${posRef.current.y}px) scale(${scaleRef.current})`;
+    el.style.cursor = scaleRef.current > 1 ? 'grab' : 'zoom-in';
+  };
+
+  const setZoom = (next: number, animate = true) => {
+    const clamped = clamp(next, MIN_SCALE, MAX_SCALE);
+    scaleRef.current = clamped;
+    if (clamped === MIN_SCALE) posRef.current = { x: 0, y: 0 };
+    else clampPos(clamped);
+    setScale(clamped);
+    applyTransform(animate);
+    bumpControls();
+  };
+
+  // Full identity reset -- only when actually navigating to a different
+  // photo. Resets zoom/pan and goes back to the fast thumbnail placeholder.
+  useEffect(() => {
+    let cancelled = false;
+    setSrc(null);
+    setIsOriginal(false);
+    setBoxSize(null);
+    naturalDimsRef.current = null;
+    scaleRef.current = 1;
+    posRef.current = { x: 0, y: 0 };
+    setScale(1);
+
+    getFileThumbnailUrl(fileId)
+      .then((data) => { if (!cancelled) setSrc((cur) => cur ?? data.thumbnailUrl); })
+      .catch(() => {});
+
+    return () => { cancelled = true; };
+  }, [fileId]);
+
+  // Fullscreen toggles change how much space the container actually has --
+  // re-lock the box at the new size (same aspect ratio, already known) so
+  // going fullscreen doesn't leave the photo pinned at its old windowed size.
+  useEffect(() => {
+    if (naturalDimsRef.current) lockBoxSize(naturalDimsRef.current.w, naturalDimsRef.current.h);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fullscreen]);
+
+  // Preloads and swaps in the previewUrl the parent currently has --
+  // fires on first load AND again later if the parent's background poll
+  // upgrades a thumbnail-tier previewUrl to the previewKey tier once the
+  // backfill/preview worker catches up (see FilePreviewModal). Deliberately
+  // separate from the identity-reset effect above and touches no zoom/pan
+  // state -- a background quality upgrade shouldn't reset anything the user
+  // is mid-gesture on.
+  //
+  // Once THAT lands, chases a third and final stage: the real, unprocessed
+  // original file. previewKey (2000px, WebP q85) is a genuine lossy
+  // re-encode -- visibly softer under zoom and, before the color-profile fix
+  // in previewWorker.ts, could shift colors -- so it's still a stand-in, not
+  // the real thing. Unlike thumbnail/preview generation, the original needs
+  // no async worker or polling: it's already sitting in storage, so this
+  // just downloads+decodes it directly and swaps it in once ready. Skipped
+  // entirely when the server already reported quality 'original' (no
+  // processed derivative exists at all, so fullUrl already *is* the file).
+  useEffect(() => {
+    let cancelled = false;
+    const img = new Image();
+    img.onload = () => {
+      if (cancelled) return;
+      setSrc(fullUrl);
+      if (quality === 'original') {
+        setIsOriginal(true);
+        return;
+      }
+      getFileOriginalUrl(fileId)
+        .then((data) => {
+          if (cancelled) return;
+          const orig = new Image();
+          orig.onload = () => { if (!cancelled) { setSrc(data.originalUrl); setIsOriginal(true); } };
+          orig.src = data.originalUrl;
+        })
+        .catch(() => {});
+    };
+    img.onerror = () => { if (!cancelled) setSrc((cur) => cur ?? fullUrl); };
+    img.src = fullUrl;
+    return () => { cancelled = true; };
+  }, [fullUrl, fileId, quality]);
+
+  useEffect(() => { applyTransform(false); }, [src]);
+
+  const handleWheel = (e: WheelEvent) => {
+    e.preventDefault();
+    setZoom(scaleRef.current - e.deltaY * 0.0035, false);
+  };
+
+  const handleDoubleClick = (e: MouseEvent) => {
+    if (scaleRef.current > 1) {
+      setZoom(1);
+      return;
+    }
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (rect) {
+      // Zoom in centered on the click point.
+      posRef.current = {
+        x: -(e.clientX - rect.left - rect.width / 2) * (DOUBLE_TAP_SCALE - 1),
+        y: -(e.clientY - rect.top - rect.height / 2) * (DOUBLE_TAP_SCALE - 1),
+      };
+    }
+    setZoom(DOUBLE_TAP_SCALE);
+  };
+
+  const handlePointerDown = (e: ReactPointerEvent) => {
+    (e.target as Element).setPointerCapture(e.pointerId);
+    pointers.current.set(e.pointerId, e.nativeEvent);
+    if (pointers.current.size === 2) {
+      const [a, b] = Array.from(pointers.current.values());
+      pinchStartDist.current = dist(a, b);
+      pinchStartScale.current = scaleRef.current;
+      dragStart.current = null;
+    } else if (pointers.current.size === 1 && scaleRef.current > 1) {
+      dragStart.current = { x: e.clientX, y: e.clientY, px: posRef.current.x, py: posRef.current.y };
+      if (imgRef.current) imgRef.current.style.cursor = 'grabbing';
+    }
+  };
+
+  const handlePointerMove = (e: ReactPointerEvent) => {
+    if (!pointers.current.has(e.pointerId)) return;
+    pointers.current.set(e.pointerId, e.nativeEvent);
+
+    if (pointers.current.size === 2 && pinchStartDist.current) {
+      const [a, b] = Array.from(pointers.current.values());
+      const factor = dist(a, b) / pinchStartDist.current;
+      setZoom(pinchStartScale.current * factor, false);
+    } else if (pointers.current.size === 1 && dragStart.current) {
+      posRef.current = {
+        x: dragStart.current.px + (e.clientX - dragStart.current.x),
+        y: dragStart.current.py + (e.clientY - dragStart.current.y),
+      };
+      clampPos(scaleRef.current);
+      applyTransform(false);
+    }
+  };
+
+  const endPointer = (e: ReactPointerEvent) => {
+    pointers.current.delete(e.pointerId);
+    if (pointers.current.size < 2) pinchStartDist.current = null;
+    if (pointers.current.size === 0) {
+      dragStart.current = null;
+      if (scaleRef.current <= MIN_SCALE) posRef.current = { x: 0, y: 0 };
+      applyTransform(true);
+    }
+  };
+
+  if (!src) {
+    return <LoadingSpinner size="xl" className="border-white/30 border-t-white" />;
+  }
+
+  return (
+    <div
+      ref={containerRef}
+      className="relative w-full h-full flex items-center justify-center overflow-hidden touch-none select-none"
+      onWheel={handleWheel}
+      onDoubleClick={handleDoubleClick}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={endPointer}
+      onPointerCancel={endPointer}
+      onPointerLeave={(e) => { if (dragStart.current) endPointer(e); }}
+    >
+      <img
+        ref={imgRef}
+        src={src}
+        alt={alt}
+        draggable={false}
+        onLoad={(e) => {
+          // Guard, not a dependency check -- only the very first tier to
+          // actually finish loading for this photo gets to set the box.
+          if (!boxSize) {
+            const el = e.currentTarget;
+            lockBoxSize(el.naturalWidth, el.naturalHeight);
+          }
+        }}
+        className="object-contain rounded-lg"
+        style={
+          boxSize
+            ? { width: boxSize.w, height: boxSize.h }
+            : { maxWidth: '100%', maxHeight: fullscreen ? '100vh' : 'calc(85vh - 120px)' }
+        }
+      />
+
+      {/* Shown while the modal is still displaying the 400px grid thumbnail
+          because the real preview hasn't finished generating yet (a fresh
+          upload or a large backfill can lag a few seconds to minutes behind
+          real-time viewing) -- FilePreviewModal polls in the background and
+          this disappears on its own the moment the upgrade lands. */}
+      {!isOriginal && (
+        <div className="absolute top-3 right-3 flex items-center gap-1.5 bg-black/50 backdrop-blur-sm rounded-full px-2.5 py-1 text-xs text-white/80">
+          <LoadingSpinner size="sm" className="border-white/30 border-t-white" />
+          Low quality
+        </div>
+      )}
+
+      {/* Zoom controls -- the click-driven alternative to pinch/scroll, and
+          the visible affordance that zooming is even possible here. Fades
+          out after a second of zoom inactivity, held open while hovered. */}
+      <div
+        onMouseEnter={bumpControls}
+        className={`absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-1 bg-black/50 backdrop-blur-sm rounded-full px-1.5 py-1 transition-opacity duration-300 ${controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+      >
+        <button
+          onClick={(e) => { e.stopPropagation(); setZoom(scaleRef.current - 0.75); }}
+          disabled={scale <= MIN_SCALE}
+          className="p-1.5 rounded-full text-white/80 hover:text-white hover:bg-white/10 disabled:opacity-30"
+        >
+          <ZoomOut className="w-4 h-4" />
+        </button>
+        <span className="text-white/70 text-xs w-10 text-center tabular-nums">{Math.round(scale * 100)}%</span>
+        <button
+          onClick={(e) => { e.stopPropagation(); setZoom(scaleRef.current + 0.75); }}
+          disabled={scale >= MAX_SCALE}
+          className="p-1.5 rounded-full text-white/80 hover:text-white hover:bg-white/10 disabled:opacity-30"
+        >
+          <ZoomIn className="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PreviewContent({ file, previewUrl, quality, fullscreen }: { file: DriveFile; previewUrl: string; quality: 'thumbnail' | 'preview' | 'original' | null; fullscreen: boolean }) {
   const { mimeType } = file;
 
   if (mimeType.startsWith('image/')) {
-    return (
-      <img
-        src={previewUrl}
-        alt={file.name}
-        className="max-w-full max-h-full object-contain rounded-lg"
-        style={{ maxHeight: 'calc(85vh - 120px)' }}
-      />
-    );
+    return <ProgressiveImage fileId={file.id} fullUrl={previewUrl} quality={quality} alt={file.name} fullscreen={fullscreen} />;
   }
 
   if (mimeType.startsWith('video/')) {
@@ -134,23 +453,97 @@ const ONE_MB = 1024 * 1024;
 
 export function FilePreviewModal({ file, onClose, onNext, onPrev, hasNext, hasPrev }: Props) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewQuality, setPreviewQuality] = useState<'thumbnail' | 'preview' | 'original' | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
   const [rawMode, setRawMode] = useState(false);
   const [rawContent, setRawContent] = useState<string | null>(null);
   const [rawLoading, setRawLoading] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const modalRef = useRef<HTMLDivElement>(null);
 
+  // Fetches the preview URL, and -- if the backend says it's still only the
+  // 400px thumbnail stand-in (previewKey not generated yet) -- keeps quietly
+  // re-checking every few seconds so a slow backfill/upload that finishes
+  // AFTER the modal opened still upgrades on screen instead of staying stuck.
   useEffect(() => {
     if (!file) return;
+    let cancelled = false;
+    let pollTimer: ReturnType<typeof setTimeout> | null = null;
+    let pollsLeft = 20; // ~60s of retrying at 3s apart -- generous for a large backfill queue
+
     setIsLoading(true);
     setPreviewUrl(null);
+    setPreviewQuality(null);
     setRawMode(false);
     setRawContent(null);
-    getFilePreviewUrl(file.id)
-      .then((data) => setPreviewUrl(data.previewUrl))
-      .catch(() => {})
-      .finally(() => setIsLoading(false));
+
+    const check = () => {
+      getFilePreviewUrl(file.id)
+        .then((data) => {
+          if (cancelled) return;
+          setPreviewUrl(data.previewUrl);
+          setPreviewQuality(data.quality);
+          setIsLoading(false);
+          if (data.quality === 'thumbnail' && pollsLeft > 0) {
+            pollsLeft--;
+            pollTimer = setTimeout(check, 3000);
+          }
+        })
+        .catch(() => { if (!cancelled) setIsLoading(false); });
+    };
+    check();
+
+    return () => {
+      cancelled = true;
+      if (pollTimer) clearTimeout(pollTimer);
+    };
   }, [file?.id]);
+
+  // True browser Fullscreen API where it exists (hides tab/URL chrome too,
+  // not just CSS) -- but iOS Safari has NO Fullscreen API for ordinary
+  // elements at all (`Element.prototype.requestFullscreen` is simply
+  // undefined there, video-only), so calling it optional-chained silently
+  // no-ops and the button looks broken. Fall back to a CSS-only "maximized"
+  // mode (isFullscreen state alone already drives the bigger image/hidden
+  // chrome) whenever the real API is missing or its request gets rejected --
+  // that's the best any web page can do on iOS, but it beats doing nothing.
+  const toggleFullscreen = () => {
+    if (isFullscreen) {
+      if (document.fullscreenElement) {
+        document.exitFullscreen().catch(() => {});
+      } else {
+        setIsFullscreen(false);
+      }
+      return;
+    }
+    const el = modalRef.current;
+    if (el?.requestFullscreen) {
+      el.requestFullscreen()
+        .then(() => setIsFullscreen(true))
+        .catch(() => setIsFullscreen(true)); // rejected (e.g. Permissions-Policy) -- still give the CSS fallback
+    } else {
+      setIsFullscreen(true); // no Fullscreen API at all (iOS Safari)
+    }
+  };
+
+  useEffect(() => {
+    // Only reconcile FROM a real fullscreen transition (native exit via the
+    // browser's own UI/Escape) -- don't let this fire-and-clobber the CSS
+    // fallback path above, which never touches document.fullscreenElement.
+    const handler = () => { if (document.fullscreenElement === null) setIsFullscreen(false); };
+    document.addEventListener('fullscreenchange', handler);
+    return () => document.removeEventListener('fullscreenchange', handler);
+  }, []);
+
+  // Fullscreen is per-photo browsing-session state, not per-file -- exit it
+  // when the modal itself closes so a later unrelated open doesn't inherit it.
+  useEffect(() => {
+    if (!file) {
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+      setIsFullscreen(false);
+    }
+  }, [file]);
 
   const handleDownload = async () => {
     if (!file) return;
@@ -183,7 +576,7 @@ export function FilePreviewModal({ file, onClose, onNext, onPrev, hasNext, hasPr
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === 'ArrowRight' && hasNext) onNext?.();
       if (e.key === 'ArrowLeft' && hasPrev) onPrev?.();
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape' && !document.fullscreenElement) onClose();
     };
     document.addEventListener('keydown', handleKey);
     return () => document.removeEventListener('keydown', handleKey);
@@ -207,7 +600,7 @@ export function FilePreviewModal({ file, onClose, onNext, onPrev, hasNext, hasPr
           <div className="fixed inset-0 bg-black/80 backdrop-blur-md" />
         </Transition.Child>
 
-        <div className="fixed inset-0 flex flex-col">
+        <div ref={modalRef} className="fixed inset-0 flex flex-col bg-black">
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 bg-black/40">
             <div className="flex items-center gap-3 min-w-0">
@@ -231,6 +624,15 @@ export function FilePreviewModal({ file, onClose, onNext, onPrev, hasNext, hasPr
                   {rawLoading ? '…' : rawMode ? 'Normal' : 'Raw'}
                 </button>
               )}
+              {file?.mimeType.startsWith('image/') && (
+                <button
+                  onClick={toggleFullscreen}
+                  title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+                  className="p-1.5 rounded-lg text-white/70 hover:text-white hover:bg-white/10"
+                >
+                  {isFullscreen ? <Minimize2 className="w-5 h-5" /> : <Maximize2 className="w-5 h-5" />}
+                </button>
+              )}
               <button
                 onClick={() => setShowInfo((s) => !s)}
                 className={clsx('p-1.5 rounded-lg text-white/70 hover:text-white hover:bg-white/10', showInfo && 'bg-white/10 text-white')}
@@ -248,7 +650,7 @@ export function FilePreviewModal({ file, onClose, onNext, onPrev, hasNext, hasPr
           </div>
 
           {/* Content area */}
-          <div className="flex-1 flex items-center justify-center gap-4 px-4 overflow-hidden">
+          <div className={clsx('flex-1 flex items-center justify-center overflow-hidden', isFullscreen ? 'gap-0 px-0' : 'gap-4 px-4')}>
             {/* Prev button */}
             <button
               onClick={onPrev}
@@ -259,7 +661,7 @@ export function FilePreviewModal({ file, onClose, onNext, onPrev, hasNext, hasPr
             </button>
 
             {/* Preview */}
-            <div className="flex-1 flex items-center justify-center min-w-0 max-w-5xl">
+            <div className={clsx('flex-1 flex items-center justify-center min-w-0', !isFullscreen && 'max-w-5xl')}>
               {isLoading ? (
                 <LoadingSpinner size="xl" className="border-white/30 border-t-white" />
               ) : rawMode && rawContent !== null ? (
@@ -272,7 +674,7 @@ export function FilePreviewModal({ file, onClose, onNext, onPrev, hasNext, hasPr
                   </pre>
                 </div>
               ) : previewUrl && file ? (
-                <PreviewContent file={file} previewUrl={previewUrl} />
+                <PreviewContent file={file} previewUrl={previewUrl} quality={previewQuality} fullscreen={isFullscreen} />
               ) : (
                 // getFilePreviewUrl failed, or the file has no preview URL for
                 // some other reason -- show the same fallback PreviewContent

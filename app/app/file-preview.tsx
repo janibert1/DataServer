@@ -2,8 +2,8 @@ import { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, Platform } from 'react-native';
 import { SafeAreaView, SafeAreaProvider } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
-import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
+import { Maximize2, Minimize2 } from 'lucide-react-native';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { WebView } from 'react-native-webview';
 import * as ScreenOrientation from 'expo-screen-orientation';
@@ -12,8 +12,15 @@ import { getFilePreviewUrl, getFileDownloadUrl } from '@/lib/api/files';
 import { downloadAndShareFile } from '@/lib/hooks/use-download';
 import { formatFileSize, formatDate } from '@/lib/format';
 import { FileIcon } from '@/components/file/file-icon';
+import { ZoomableImage } from '@/components/file/zoomable-image';
 import Toast from 'react-native-toast-message';
 import type { DriveFile } from '@/lib/types';
+
+// Matches frontend/src/components/files/FilePreviewModal.tsx's structure:
+// this screen now owns the previewUrl/quality poll (was previously buried
+// inside PreviewContent, one-shot, no upgrade path) so a preview that's
+// still on the thumbnail tier when the screen opens quietly upgrades on
+// screen once the backfill/preview worker catches up, exactly like web.
 
 function VideoPreview({ uri }: { uri: string }) {
   const player = useVideoPlayer(uri, (p) => {
@@ -45,44 +52,16 @@ function AudioPreview({ uri }: { uri: string }) {
   );
 }
 
-function PreviewContent({ file }: { file: DriveFile }) {
-  const [signedUrl, setSignedUrl] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadUrl() {
-      try {
-        // For all file types, get the signed S3 URL via the preview endpoint
-        const data = await getFilePreviewUrl(file.id);
-        if (!cancelled) setSignedUrl(data.previewUrl);
-      } catch {
-        // If preview fails, try the download URL (works for all files)
-        try {
-          const data = await getFileDownloadUrl(file.id);
-          if (!cancelled) setSignedUrl(data.downloadUrl);
-        } catch {
-          // No URL available
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-
-    loadUrl();
-    return () => { cancelled = true; };
-  }, [file.id]);
-
-  if (loading) {
-    return (
-      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-        <ActivityIndicator size="large" color="white" />
-      </View>
-    );
-  }
-
-  if (!signedUrl) {
+function PreviewContent({
+  file, previewUrl, quality, chromeVisible, onImageTap,
+}: {
+  file: DriveFile;
+  previewUrl: string | null;
+  quality: 'thumbnail' | 'preview' | 'original' | null;
+  chromeVisible: boolean;
+  onImageTap: () => void;
+}) {
+  if (!previewUrl) {
     return (
       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
         <FileIcon mimeType={file.mimeType} size={64} />
@@ -92,20 +71,23 @@ function PreviewContent({ file }: { file: DriveFile }) {
     );
   }
 
-  // Images
+  // Images — full progressive-load + pinch/pan/double-tap zoom, see
+  // ZoomableImage for the tier-chasing logic.
   if (file.mimeType.startsWith('image/')) {
     return (
-      <Image
-        source={{ uri: signedUrl }}
-        style={{ width: '100%', height: '100%' }}
-        contentFit="contain"
+      <ZoomableImage
+        fileId={file.id}
+        fullUrl={previewUrl}
+        quality={quality}
+        chromeVisible={chromeVisible}
+        onImageTap={onImageTap}
       />
     );
   }
 
   // Video
   if (file.mimeType.startsWith('video/')) {
-    return <VideoPreview uri={signedUrl} />;
+    return <VideoPreview uri={previewUrl} />;
   }
 
   // Audio — use video player with native controls (handles audio playback)
@@ -114,7 +96,7 @@ function PreviewContent({ file }: { file: DriveFile }) {
       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
         <Ionicons name="musical-notes" size={64} color="#6366f1" />
         <Text style={{ color: 'white', marginTop: 16, fontSize: 16 }}>{file.name}</Text>
-        <AudioPreview uri={signedUrl} />
+        <AudioPreview uri={previewUrl} />
       </View>
     );
   }
@@ -123,7 +105,7 @@ function PreviewContent({ file }: { file: DriveFile }) {
   if (file.mimeType === 'application/pdf') {
     return (
       <WebView
-        source={{ uri: signedUrl }}
+        source={{ uri: previewUrl }}
         style={{ flex: 1, backgroundColor: '#000' }}
         allowsInlineMediaPlayback
       />
@@ -139,7 +121,7 @@ function PreviewContent({ file }: { file: DriveFile }) {
   ) {
     return (
       <WebView
-        source={{ uri: signedUrl }}
+        source={{ uri: previewUrl }}
         style={{ flex: 1, backgroundColor: '#1e293b' }}
       />
     );
@@ -160,6 +142,16 @@ export default function FilePreviewScreen() {
   const router = useRouter();
   const [showInfo, setShowInfo] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [quality, setQuality] = useState<'thumbnail' | 'preview' | 'original' | null>(null);
+  // Mobile's version of web's "fullscreen" toggle: this screen is already a
+  // fullScreenModal (see app/_layout.tsx), so there's no windowed-vs-fullscreen
+  // browser API distinction to mirror here -- the equivalent affordance is
+  // hiding the header chrome for max image real estate, same practical
+  // effect web's Maximize2 button has (more screen for the photo, less
+  // chrome), toggled the same way most native photo viewers do it: the
+  // button, or a tap on the image itself.
+  const [chromeVisible, setChromeVisible] = useState(true);
 
   // Unlock orientation for preview, lock back to portrait on unmount
   useEffect(() => {
@@ -171,6 +163,48 @@ export default function FilePreviewScreen() {
 
   const { data } = useFile(fileId);
   const file = data?.file;
+
+  // Fetches previewUrl, and -- if still only the thumbnail stand-in --
+  // keeps re-checking every few seconds so a slow backfill/upload that
+  // finishes after the screen opened still upgrades on screen instead of
+  // staying stuck. Same 20x/3s budget as web.
+  useEffect(() => {
+    if (!fileId) return;
+    let cancelled = false;
+    let pollTimer: ReturnType<typeof setTimeout> | null = null;
+    let pollsLeft = 20;
+
+    setPreviewUrl(null);
+    setQuality(null);
+
+    function check() {
+      getFilePreviewUrl(fileId)
+        .then((data) => {
+          if (cancelled) return;
+          setPreviewUrl(data.previewUrl);
+          setQuality(data.quality);
+          if (data.quality === 'thumbnail' && pollsLeft > 0) {
+            pollsLeft--;
+            pollTimer = setTimeout(check, 3000);
+          }
+        })
+        .catch(async () => {
+          if (cancelled) return;
+          try {
+            const d = await getFileDownloadUrl(fileId);
+            if (!cancelled) setPreviewUrl(d.downloadUrl);
+          } catch {
+            // no URL available
+          }
+        });
+    }
+    check();
+
+    return () => {
+      cancelled = true;
+      if (pollTimer) clearTimeout(pollTimer);
+    };
+  }, [fileId]);
 
   async function handleDownload() {
     if (!file) return;
@@ -191,33 +225,46 @@ export default function FilePreviewScreen() {
       <SafeAreaProvider>
       <View style={{ flex: 1, backgroundColor: '#000' }}>
         {/* Top bar — use SafeAreaView for proper inset */}
-        <SafeAreaView edges={['top']} style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingVertical: 8, minHeight: 44 }}>
-            <TouchableOpacity onPress={() => router.back()} style={{ padding: 8 }}>
-              <Ionicons name="close" size={24} color="white" />
-            </TouchableOpacity>
-            <Text style={{ color: 'white', fontWeight: '500', fontSize: 16, flex: 1, marginHorizontal: 12 }} numberOfLines={1}>
-              {file?.name ?? 'Loading...'}
-            </Text>
-            <View style={{ flexDirection: 'row', gap: 4 }}>
-              <TouchableOpacity onPress={() => setShowInfo(!showInfo)} style={{ padding: 8 }}>
-                <Ionicons name="information-circle-outline" size={24} color="white" />
+        {chromeVisible && (
+          <SafeAreaView edges={['top']} style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingVertical: 8, minHeight: 44 }}>
+              <TouchableOpacity onPress={() => router.back()} style={{ padding: 8 }}>
+                <Ionicons name="close" size={24} color="white" />
               </TouchableOpacity>
-              <TouchableOpacity onPress={handleDownload} disabled={downloading} style={{ padding: 8 }}>
-                {downloading ? (
-                  <ActivityIndicator size="small" color="white" />
-                ) : (
-                  <Ionicons name="download-outline" size={24} color="white" />
+              <Text style={{ color: 'white', fontWeight: '500', fontSize: 16, flex: 1, marginHorizontal: 12 }} numberOfLines={1}>
+                {file?.name ?? 'Loading...'}
+              </Text>
+              <View style={{ flexDirection: 'row', gap: 4 }}>
+                {file?.mimeType.startsWith('image/') && (
+                  <TouchableOpacity onPress={() => setChromeVisible(false)} style={{ padding: 8 }}>
+                    <Maximize2 size={22} color="white" />
+                  </TouchableOpacity>
                 )}
-              </TouchableOpacity>
+                <TouchableOpacity onPress={() => setShowInfo(!showInfo)} style={{ padding: 8 }}>
+                  <Ionicons name="information-circle-outline" size={24} color="white" />
+                </TouchableOpacity>
+                <TouchableOpacity onPress={handleDownload} disabled={downloading} style={{ padding: 8 }}>
+                  {downloading ? (
+                    <ActivityIndicator size="small" color="white" />
+                  ) : (
+                    <Ionicons name="download-outline" size={24} color="white" />
+                  )}
+                </TouchableOpacity>
+              </View>
             </View>
-          </View>
-        </SafeAreaView>
+          </SafeAreaView>
+        )}
 
         {/* Preview content */}
         <View style={{ flex: 1 }}>
           {file ? (
-            <PreviewContent file={file} />
+            <PreviewContent
+              file={file}
+              previewUrl={previewUrl}
+              quality={quality}
+              chromeVisible={chromeVisible}
+              onImageTap={() => setChromeVisible((v) => !v)}
+            />
           ) : (
             <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
               <ActivityIndicator size="large" color="white" />
@@ -225,8 +272,19 @@ export default function FilePreviewScreen() {
           )}
         </View>
 
+        {/* Minimal re-show control while chrome is hidden — a bare tap on
+            the image already toggles it back (onImageTap above), this is
+            just a discoverable fallback in the corner. */}
+        {!chromeVisible && (
+          <SafeAreaView edges={['top']} style={{ position: 'absolute', top: 0, right: 0 }}>
+            <TouchableOpacity onPress={() => setChromeVisible(true)} style={{ padding: 12 }}>
+              <Minimize2 size={20} color="rgba(255,255,255,0.7)" />
+            </TouchableOpacity>
+          </SafeAreaView>
+        )}
+
         {/* Info panel */}
-        {showInfo && file && (
+        {showInfo && file && chromeVisible && (
           <SafeAreaView edges={['bottom']} style={{ backgroundColor: 'rgba(15,23,42,0.95)' }}>
             <View style={{ paddingHorizontal: 20, paddingVertical: 16 }}>
               <InfoRow label="Name" value={file.name} />

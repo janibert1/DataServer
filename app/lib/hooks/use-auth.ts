@@ -49,8 +49,18 @@ export function useRegister() {
   return useMutation({
     mutationFn: authApi.register,
     onSuccess: (data) => {
-      setUser(data.user);
-      queryClient.setQueryData(queryKeys.auth.me, data.user);
+      // Matches web (RegisterPage.tsx): registering does NOT auto-login when
+      // the account still needs email verification -- the screen shows a
+      // "check your email" state instead. Previously this called setUser
+      // unconditionally, which made AuthGate navigate straight into the
+      // main app for an unverified account (before this was noticed, that
+      // account would then start hitting 403s on any requireVerifiedEmail
+      // route with no clear explanation, and never actually saw the
+      // verification prompt at all).
+      if (data.user.emailVerified) {
+        setUser(data.user);
+        queryClient.setQueryData(queryKeys.auth.me, data.user);
+      }
     },
   });
 }

@@ -15,7 +15,7 @@ export async function apiFetch<T = unknown>(
   path: string,
   options?: RequestInit & { skipAuth?: boolean },
 ): Promise<T> {
-  const { serverUrl } = useAuthStore.getState();
+  const { serverUrl, apiToken } = useAuthStore.getState();
   if (!serverUrl) throw new Error('Server URL not configured');
 
   const { skipAuth, ...fetchOptions } = options ?? {};
@@ -25,6 +25,13 @@ export async function apiFetch<T = unknown>(
     credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
+      // Bearer auth for a Google-signed-in mobile session -- see
+      // auth-store.ts's apiToken doc comment. Cookie auth (credentials:
+      // 'include' above) still covers plain email/password sessions;
+      // both can be sent together harmlessly, the backend's
+      // authenticateApiToken middleware only looks at this header when
+      // present and otherwise falls through to passport's cookie session.
+      ...(apiToken ? { Authorization: `Bearer ${apiToken}` } : {}),
       ...(fetchOptions.headers as Record<string, string>),
     },
   });

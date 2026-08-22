@@ -6,6 +6,7 @@ import { useFolder, useFolderContents, useStarFolder, useTrashFolder } from '@/l
 import { useStarFile, useTrashFile } from '@/lib/hooks/use-files';
 import { useUIStore } from '@/stores/ui-store';
 import { FileList } from '@/components/file/file-list';
+import { DriveShell } from '@/components/layout/drive-shell';
 import { Breadcrumb } from '@/components/file/breadcrumb';
 import { SortControls } from '@/components/file/sort-controls';
 import { UploadButton } from '@/components/file/upload-button';
@@ -140,14 +141,8 @@ export default function FolderScreen() {
 
   return (
     <DragDropProvider onDropOnFolder={handleDropOnFolder} onDropOnItem={handleDropOnItem}>
-      <Stack.Screen
-        options={{
-          headerShown: true,
-          title: folder?.name ?? 'Folder',
-          headerBackTitle: 'Back',
-        }}
-      />
-      <View className="flex-1 bg-slate-50">
+      <Stack.Screen options={{ headerShown: false }} />
+      <DriveShell>
         {!contentsData ? (
           <View className="flex-1 items-center justify-center">
             <ActivityIndicator size="large" color="#2563eb" />
@@ -187,7 +182,7 @@ export default function FolderScreen() {
           folderId={id}
           folderName={folder?.name ?? ''}
         />
-      </View>
+      </DriveShell>
     </DragDropProvider>
   );
 }

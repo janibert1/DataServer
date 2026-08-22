@@ -10,6 +10,7 @@ import { checkQuota, incrementUsage, decrementUsage } from '../services/quotaSer
 import { logger } from '../lib/logger';
 import { FileStatus } from '@prisma/client';
 import mime from 'mime-types';
+import { resolveMimeType } from '../lib/mimeResolve';
 
 export const backupRouter = Router();
 backupRouter.use(requireAuth, requireVerifiedEmail);
@@ -217,7 +218,7 @@ backupRouter.post(
       const fileId = uuidv4();
       const storageKey = buildStorageKey(user.id, fileId, safeName);
       const checksum = crypto.createHash('sha256').update(uploadedFile.buffer).digest('hex');
-      const detectedMime = mime.lookup(safeName) || uploadedFile.mimetype || 'application/octet-stream';
+      const detectedMime = resolveMimeType(safeName, uploadedFile.mimetype);
 
       // Check if a file with same path already exists — update it (replace)
       const existing = await prisma.file.findFirst({

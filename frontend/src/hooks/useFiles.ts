@@ -562,12 +562,30 @@ export async function getFileDownloadUrl(id: string): Promise<{ downloadUrl: str
   return res.data;
 }
 
-export async function getFilePreviewUrl(id: string): Promise<{ previewUrl: string; mimeType: string }> {
+export async function getFilePreviewUrl(id: string): Promise<{ previewUrl: string; mimeType: string; quality: 'thumbnail' | 'preview' | 'original' }> {
   // This is just signed-URL generation, not a data transfer -- it should
   // always be near-instant. Override the app-wide 120s axios timeout so a
   // stuck backend/proxy connection fails fast and falls back to
   // "Preview not available" instead of leaving the modal looking stuck.
   const res = await api.get(`/files/${id}/preview`, { timeout: 15000 });
+  return res.data;
+}
+
+// Deliberately separate from getFilePreviewUrl -- /preview now serves the
+// large 2000px preview for the full-screen modal, this stays on the small
+// 400px thumbnail for grid tiles (and as the fast placeholder the modal
+// shows first, see FilePreviewModal).
+export async function getFileThumbnailUrl(id: string): Promise<{ thumbnailUrl: string; mimeType: string }> {
+  const res = await api.get(`/files/${id}/thumbnail`, { timeout: 15000 });
+  return res.data;
+}
+
+// The real, unprocessed original -- distinct from both getFilePreviewUrl
+// (previewKey is a lossy 2000px/q85 WebP re-encode, not the real file) and
+// getFileDownloadUrl (increments downloadCount / writes an audit entry,
+// meant for an explicit user download click, not a silent background fetch).
+export async function getFileOriginalUrl(id: string): Promise<{ originalUrl: string; mimeType: string }> {
+  const res = await api.get(`/files/${id}/original`, { timeout: 15000 });
   return res.data;
 }
 

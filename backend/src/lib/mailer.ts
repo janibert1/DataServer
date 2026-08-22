@@ -145,7 +145,7 @@ export async function sendSecurityAlertEmail(
      <p>Hi ${displayName},</p>
      <div class="warning"><strong>${alertTitle}</strong><br/>${alertDetail}</div>
      <p>If this was you, no action is needed. If not, please immediately change your password and review your account security.</p>
-     <a href="${config.frontendUrl}/drive/security" class="btn">Review Security Settings</a>`,
+     <a href="${config.publicUrl}/drive/security" class="btn">Review Security Settings</a>`,
     `Security alert for your DataServer account`
   );
   await send(to, `Security Alert: ${alertTitle}`, html);
@@ -160,7 +160,7 @@ export async function sendStorageWarningEmail(
     `<h2>Storage Almost Full</h2>
      <p>Hi ${displayName},</p>
      <p>Your DataServer storage is <strong>${usedPercent}% full</strong>. Consider deleting unused files or emptying the trash to free up space.</p>
-     <a href="${config.frontendUrl}/drive/settings" class="btn">Manage Storage</a>`,
+     <a href="${config.publicUrl}/drive/settings" class="btn">Manage Storage</a>`,
     `Your storage is ${usedPercent}% full`
   );
   await send(to, 'DataServer: Storage Almost Full', html);

@@ -615,7 +615,7 @@ foldersRouter.post(
         (req.user as any).displayName,
         folder.name,
         permission,
-        `${config.frontendUrl}/drive/shared-with-me`
+        `${config.publicUrl}/drive/shared-with-me`
       ).catch(() => {});
     }
 

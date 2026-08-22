@@ -27,7 +27,22 @@ export function getFileDownloadUrl(id: string) {
 }
 
 export function getFilePreviewUrl(id: string) {
-  return apiGet<{ previewUrl: string; mimeType: string }>(`/api/files/${id}/preview`);
+  return apiGet<{ previewUrl: string; mimeType: string; quality: 'thumbnail' | 'preview' | 'original' }>(`/api/files/${id}/preview`);
+}
+
+// The real, unprocessed original file -- distinct from /download (which
+// increments downloadCount + writes an audit log entry, correct for an
+// explicit user tap but wrong for a silent background prefetch chasing full
+// quality). See backend routes/files.ts for the tier rationale.
+export function getFileOriginalUrl(id: string) {
+  return apiGet<{ originalUrl: string; mimeType: string }>(`/api/files/${id}/original`);
+}
+
+// Small 400px thumbnail -- separate from the full preview above (see web
+// FilePreviewModal/FileGrid for the matching split). Used as expo-image's
+// placeholder so the screen shows something immediately.
+export function getFileThumbnailUrl(id: string) {
+  return apiGet<{ thumbnailUrl: string; mimeType: string }>(`/api/files/${id}/thumbnail`);
 }
 
 export function renameFile(id: string, name: string) {

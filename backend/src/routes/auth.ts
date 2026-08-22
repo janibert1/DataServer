@@ -17,6 +17,7 @@ import {
   sendSecurityAlertEmail,
 } from '../lib/mailer';
 import { AuditAction, AuthProvider, UserStatus, InvitationType } from '@prisma/client';
+import { generateToken, hashToken } from './tokens';
 
 export const authRouter = Router();
 
@@ -90,7 +91,7 @@ authRouter.post(
       await notifyInvitationAccepted(invitation.creatorId, displayName);
     }
 
-    const verificationUrl = `${config.frontendUrl}/verify-email?token=${verifyToken}`;
+    const verificationUrl = `${config.publicUrl}/verify-email?token=${verifyToken}`;
     await sendVerificationEmail(email, displayName, verificationUrl).catch((e) =>
       logger.error('Failed to send verification email', { error: e.message })
     );
@@ -216,29 +217,69 @@ authRouter.get('/me', requireAuth, (req: Request, res: Response) => {
 
 // ─── Google OAuth ────────────────────────────────────────────
 
-authRouter.get('/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
+// The mobile app's WebView loads this with ?mobile=1 -- the session
+// (this WebView's own cookie, unrelated to the native-app cookie-bridging
+// problem the flag below exists to work around) carries that flag through
+// Google's whole redirect dance since Google itself redirects back to this
+// same origin, same cookie. See the callback below for why this matters:
+// a native RN fetch() never reliably receives a WebView-set session cookie
+// (confirmed live -- every native-side /api/auth/me came back 401 while the
+// WebView's own requests succeeded), so a mobile flow hands back a real
+// Bearer token via a dataserver:// deep link instead of relying on the
+// cookie at all.
+authRouter.get('/google', (req: Request, res: Response, next: any) => {
+  if (req.query.mobile === '1') (req.session as any).mobileAuthFlow = true;
+  passport.authenticate('google', { scope: ['profile', 'email'] })(req, res, next);
+});
 
 authRouter.get(
   '/google/callback',
   (req: Request, res: Response, next: any) => {
+    const isMobile = !!(req.session as any).mobileAuthFlow;
+    delete (req.session as any).mobileAuthFlow;
+
     passport.authenticate('google', async (err: any, user: any, info: any) => {
       if (err) return next(err);
 
       if (!user) {
         if (info?.message === 'GOOGLE_NEW_USER') {
-          // Redirect to registration with Google profile info stored in session
           const profile = info.googleProfile;
           (req.session as any).pendingGoogleProfile = profile;
-          return res.redirect(`${config.frontendUrl}/register?googlePending=true`);
+          if (isMobile) {
+            // No mobile registration flow yet -- send the app an explicit
+            // error rather than a dead-end web-only /register page it can't
+            // usefully render inside the WebView handoff.
+            return res.redirect('dataserver://auth-callback?error=needs_registration');
+          }
+          return res.redirect(`${config.publicUrl}/register?googlePending=true`);
         }
-        return res.redirect(`${config.frontendUrl}/login?error=google_failed`);
+        if (isMobile) {
+          return res.redirect('dataserver://auth-callback?error=google_failed');
+        }
+        return res.redirect(`${config.publicUrl}/login?error=google_failed`);
       }
 
       req.logIn(user, async (loginErr) => {
         if (loginErr) return next(loginErr);
         await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
         await auditFromRequest(req, AuditAction.USER_LOGIN, { entityType: 'User', entityId: user.id });
-        res.redirect(`${config.frontendUrl}/drive`);
+
+        if (isMobile) {
+          // Hand back a real Bearer token instead of relying on the session
+          // cookie -- see the /google route's comment for why.
+          const rawToken = generateToken();
+          await prisma.apiToken.create({
+            data: {
+              userId: user.id,
+              name: 'Mobile app (Google sign-in)',
+              tokenHash: hashToken(rawToken),
+              tokenPrefix: rawToken.slice(0, 11),
+            },
+          });
+          return res.redirect(`dataserver://auth-callback?token=${rawToken}`);
+        }
+
+        res.redirect(`${config.publicUrl}/drive`);
       });
     })(req, res, next);
   }
@@ -361,7 +402,7 @@ authRouter.post('/resend-verification', authRateLimiter, requireAuth, async (req
     data: { emailVerifyToken: token, emailVerifyExpiry: expiry },
   });
 
-  const url = `${config.frontendUrl}/verify-email?token=${token}`;
+  const url = `${config.publicUrl}/verify-email?token=${token}`;
   await sendVerificationEmail(user.email, user.displayName, url);
   res.json({ message: 'Verification email resent.' });
 });
@@ -386,7 +427,7 @@ authRouter.post(
         data: { userId: user.id, token, expiresAt: expiry },
       });
 
-      const resetUrl = `${config.frontendUrl}/reset-password?token=${token}`;
+      const resetUrl = `${config.publicUrl}/reset-password?token=${token}`;
       await sendPasswordResetEmail(user.email, user.displayName, resetUrl).catch(() => {});
 
       await auditFromRequest(req, AuditAction.PASSWORD_RESET_REQUESTED, {

@@ -67,7 +67,7 @@ async function handleEmailVerification(data: EmailVerificationJobData): Promise<
   });
 
   const displayName = user?.displayName ?? 'User';
-  const verificationUrl = `${config.frontendUrl}/verify-email?token=${data.token}`;
+  const verificationUrl = `${config.publicUrl}/verify-email?token=${data.token}`;
 
   await sendVerificationEmail(data.email, displayName, verificationUrl);
   logger.info('Notification: verification email sent', { userId: data.userId });
@@ -81,14 +81,14 @@ async function handlePasswordReset(data: PasswordResetJobData): Promise<void> {
   });
 
   const displayName = user?.displayName ?? 'User';
-  const resetUrl = `${config.frontendUrl}/reset-password?token=${data.token}`;
+  const resetUrl = `${config.publicUrl}/reset-password?token=${data.token}`;
 
   await sendPasswordResetEmail(data.email, displayName, resetUrl);
   logger.info('Notification: password reset email sent', { email: data.email });
 }
 
 async function handlePlatformInvitation(data: PlatformInvitationJobData): Promise<void> {
-  const registrationUrl = `${config.frontendUrl}/register?code=${data.code}`;
+  const registrationUrl = `${config.publicUrl}/register?code=${data.code}`;
 
   await sendPlatformInvitationEmail(
     data.email,
@@ -111,8 +111,8 @@ async function handleFolderShared(data: FolderSharedJobData): Promise<void> {
 
   // Build a direct folder URL; include invite code when the recipient is not yet a member
   const folderUrl = data.inviteCode
-    ? `${config.frontendUrl}/register?code=${data.inviteCode}`
-    : `${config.frontendUrl}/drive`;
+    ? `${config.publicUrl}/register?code=${data.inviteCode}`
+    : `${config.publicUrl}/drive`;
 
   await sendFolderSharedEmail(
     data.email,

@@ -20,6 +20,7 @@ import { PassThrough, Transform } from 'stream';
 import unzipper from 'unzipper';
 import { Upload } from '@aws-sdk/lib-storage';
 import mime from 'mime-types';
+import { resolveMimeType, isRawImageMimeType } from '../lib/mimeResolve';
 import { auditFromRequest } from '../services/auditService';
 import { checkFileAccess, getEffectivePermission } from '../services/sharingService';
 import { checkQuota, incrementUsage, decrementUsage } from '../services/quotaService';
@@ -305,6 +306,13 @@ filesRouter.post(
         const safeName = sanitizeFileName(file.originalname);
         const storageKey = buildStorageKey(user.id, fileId, safeName);
         const checksum = crypto.createHash('sha256').update(file.buffer).digest('hex');
+        // Trust the filename extension over the client-declared Content-Type --
+        // some upload clients (e.g. scripted/migration uploads) send a generic
+        // or wrong mimetype (seen live: a NAS photo migration tagged 4365 real
+        // JPGs as text/plain, which silently skipped thumbnail generation and
+        // broke the preview modal's file-type routing). Same fallback order
+        // already used successfully in the /api/backup/upload route.
+        const detectedMime = resolveMimeType(safeName, file.mimetype);
 
         // Get folder path for display
         let folderPath = '/';
@@ -319,7 +327,7 @@ filesRouter.post(
             id: fileId,
             name: safeName,
             originalName: file.originalname,
-            mimeType: file.mimetype,
+            mimeType: detectedMime,
             size: totalSize,
             storageKey,
             checksum,
@@ -345,10 +353,10 @@ filesRouter.post(
         if (config.cache.enabled) {
           // Write-through local cache: ack the upload fast, flush to the
           // (often much slower, NAS-backed) S3/MinIO store in the background.
-          await cacheWrite(storageKey, file.buffer, file.mimetype, s3Metadata);
+          await cacheWrite(storageKey, file.buffer, detectedMime, s3Metadata);
           await cacheFlushQueue.add('flush', { key: storageKey });
         } else {
-          await uploadToS3(storageKey, file.buffer, file.mimetype, s3Metadata);
+          await uploadToS3(storageKey, file.buffer, detectedMime, s3Metadata);
         }
 
         await prisma.file.update({
@@ -373,7 +381,7 @@ filesRouter.post(
           id: dbFile.id,
           name: safeName,
           size: file.size,
-          mimeType: file.mimetype,
+          mimeType: detectedMime,
           checksum,
           folderId: folderId ?? null,
           status: FileStatus.ACTIVE,
@@ -500,6 +508,74 @@ filesRouter.get('/:id/download/stream', async (req: Request, res: Response) => {
   }
 });
 
+// ─── Original file (true full quality, for the preview modal's 3rd stage) ─
+// Deliberately separate from /:id/download: that route increments
+// downloadCount and writes a FILE_DOWNLOADED audit entry, both meant for an
+// explicit user download action -- the preview modal silently fetching the
+// original in the background to upgrade past the lossy previewKey re-encode
+// is a view, not a download, and shouldn't be counted or logged as one.
+
+filesRouter.get('/:id/original', async (req: Request, res: Response) => {
+  const user = req.user as any;
+  const { id } = req.params;
+
+  const file = await prisma.file.findUnique({
+    where: { id },
+    select: { storageKey: true, status: true, mimeType: true },
+  });
+
+  if (!file || file.status === FileStatus.DELETED) {
+    res.status(404).json({ error: 'File not found.' });
+    return;
+  }
+
+  const canAccess = await checkFileAccess(user.id, id, SharePermission.VIEWER);
+  if (!canAccess) {
+    res.status(403).json({ error: 'Access denied.' });
+    return;
+  }
+
+  const url = (await isPendingFlush(file.storageKey))
+    ? `/api/files/${id}/download/stream`
+    : await getSignedDownloadUrl(file.storageKey, 300);
+
+  res.json({ originalUrl: url, mimeType: file.mimeType });
+});
+
+// ─── Thumbnail (small, grid/list views) ───────────────────────
+// Deliberately separate from /preview: /preview now prefers the large
+// previewKey (2000px) for the full-screen modal, but the grid renders many
+// thumbnails per page and should always stay on the small 400px thumbnailKey
+// -- sharing one endpoint would mean every grid tile pulling the big preview.
+
+filesRouter.get('/:id/thumbnail', async (req: Request, res: Response) => {
+  const user = req.user as any;
+  const { id } = req.params;
+
+  const file = await prisma.file.findUnique({
+    where: { id },
+    select: { thumbnailKey: true, storageKey: true, status: true, mimeType: true },
+  });
+
+  if (!file || file.status === FileStatus.DELETED) {
+    res.status(404).json({ error: 'File not found.' });
+    return;
+  }
+
+  const canAccess = await checkFileAccess(user.id, id, SharePermission.VIEWER);
+  if (!canAccess) {
+    res.status(403).json({ error: 'Access denied.' });
+    return;
+  }
+
+  const key = file.thumbnailKey ?? file.storageKey;
+  const url = (await isPendingFlush(key))
+    ? `/api/files/${id}/download/stream`
+    : await getSignedDownloadUrl(key, 300);
+
+  res.json({ thumbnailUrl: url, mimeType: file.mimeType });
+});
+
 // ─── Preview file ────────────────────────────────────────────
 
 filesRouter.get('/:id/preview', async (req: Request, res: Response) => {
@@ -536,7 +612,36 @@ filesRouter.get('/:id/preview', async (req: Request, res: Response) => {
     ? `/api/files/${id}/download/stream`
     : await getSignedDownloadUrl(key, 300, responseContentType);
 
-  res.json({ previewUrl: url, mimeType: file.mimeType });
+  // Tells the frontend which tier is actually being served, so it can show
+  // a "low quality" badge and know whether there's a better version to chase.
+  // Three real tiers, in ascending quality: 'thumbnail' (400px grid
+  // thumbnailKey), 'preview' (the dedicated 2000px/q85 previewKey -- NOT the
+  // same as the true original: it's a lossy WebP re-encode, visibly softer
+  // and can shift colors if the source ICC profile wasn't carried through),
+  // 'original' (no processed derivative exists at all, so storageKey -- the
+  // real unmodified file -- is what's actually being served). The preview
+  // worker runs async, so a file opened right after upload/backfill can
+  // briefly only have a thumbnail or nothing at all.
+  // Camera RAW (NEF/CR2/...) is never browser-displayable at all -- the
+  // previewKey/thumbnailKey WebP (generated from the camera's own embedded
+  // JPEG preview, see previewWorker.ts) is the ceiling, not a stand-in for
+  // something better the modal could ever chase. Report 'original' once
+  // that exists so the frontend doesn't try to fetch+render the raw bytes
+  // (which would just silently fail to load) and doesn't show a perpetual
+  // "low quality" badge for something that's already as good as it gets.
+  // Only the previewKey tier gets the RAW-ceiling override -- while
+  // still on thumbnailKey because previewKey genuinely hasn't finished
+  // generating yet, this must keep reporting 'thumbnail' so the frontend's
+  // poll-for-upgrade loop keeps running instead of stopping early.
+  const isRaw = isRawImageMimeType(file.mimeType);
+  const quality: 'thumbnail' | 'preview' | 'original' =
+    key === file.thumbnailKey
+      ? 'thumbnail'
+      : key === file.previewKey
+        ? (isRaw ? 'original' : 'preview')
+        : 'original';
+
+  res.json({ previewUrl: url, mimeType: file.mimeType, quality });
 });
 
 // ─── Rename file ─────────────────────────────────────────────
@@ -946,6 +1051,10 @@ filesRouter.post('/upload/init', requireAuth, requireVerifiedEmail, async (req: 
   const fileId = uuidv4();
   const safeName = sanitizeFileName(name);
   const storageKey = buildStorageKey(user.id, fileId, safeName);
+  // Same filename-first fallback as /upload and /api/backup/upload -- a
+  // client-declared mimeType can be wrong/generic (this is the JSON-body
+  // equivalent of the same bug fixed there).
+  const detectedMime = resolveMimeType(safeName, mimeType);
 
   let folderPath = '/';
   if (folderId) {
@@ -965,13 +1074,13 @@ filesRouter.post('/upload/init', requireAuth, requireVerifiedEmail, async (req: 
     : (await s3Client.send(new CreateMultipartUploadCommand({
         Bucket: config.s3.bucket,
         Key: storageKey,
-        ContentType: mimeType,
+        ContentType: detectedMime,
         Metadata: { originalName: encodeURIComponent(name), uploadedBy: user.id },
       }))).UploadId;
 
   await prisma.file.create({
     data: {
-      id: fileId, name: safeName, originalName: name, mimeType, size: totalSize,
+      id: fileId, name: safeName, originalName: name, mimeType: detectedMime, size: totalSize,
       storageKey, checksum: '', ownerId: user.id,
       folderId: folderId ?? null, path: `${folderPath}${safeName}`,
       status: FileStatus.UPLOADING,
