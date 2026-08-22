@@ -1,0 +1,73 @@
+name: Build Unsigned iOS IPA (SideStore sideload)
+
+# Manual only -- this is for Jan's own personal sideload via SideStore, not a
+# release pipeline. SideStore signs the app itself with a free Apple ID at
+# install time, so this deliberately builds with code signing turned OFF --
+# EAS Build's cloud iOS pipeline needs a paid Apple Developer Program
+# account (verified against Expo's own docs), this sidesteps that entirely
+# by using a real Xcode toolchain on a GitHub-hosted macOS runner instead
+# (unlimited free minutes on a public repo).
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install JS dependencies
+        run: npm ci
+
+      - name: Expo prebuild (generate native ios/ project)
+        run: npx expo prebuild --platform ios --no-install
+
+      - name: Install CocoaPods
+        run: cd ios && pod install
+
+      - name: Detect workspace/scheme
+        id: detect
+        run: |
+          cd ios
+          WORKSPACE=$(ls -d *.xcworkspace | head -1)
+          SCHEME=$(xcodebuild -workspace "$WORKSPACE" -list | awk '/Schemes:/{flag=1;next} flag && NF{print; exit}' | xargs)
+          echo "Detected workspace=$WORKSPACE scheme=$SCHEME"
+          echo "workspace=$WORKSPACE" >> "$GITHUB_OUTPUT"
+          echo "scheme=$SCHEME" >> "$GITHUB_OUTPUT"
+
+      - name: Archive (unsigned)
+        run: |
+          cd ios
+          xcodebuild archive \
+            -workspace "${{ steps.detect.outputs.workspace }}" \
+            -scheme "${{ steps.detect.outputs.scheme }}" \
+            -configuration Release \
+            -archivePath "$PWD/build/App.xcarchive" \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES
+
+      - name: Package raw IPA (Payload/*.app zipped, no signing)
+        run: |
+          cd ios/build/App.xcarchive/Products/Applications
+          APP=$(ls -d *.app | head -1)
+          mkdir Payload
+          mv "$APP" Payload/
+          zip -r -y ../../../App-unsigned.ipa Payload
+          echo "Built: $(ls -la ../../../App-unsigned.ipa)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DataServer-unsigned-ipa
+          path: app/ios/build/App-unsigned.ipa
+          retention-days: 14
