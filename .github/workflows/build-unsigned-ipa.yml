@@ -36,6 +36,22 @@ jobs:
       - name: Install JS dependencies
         run: npm ci --legacy-peer-deps
 
+      - name: Stamp build number from the run number
+        # app.json has no ios.buildNumber, so without this every prebuild
+        # bakes the same static CFBundleVersion=1 into the native project no
+        # matter which commit/run produced it -- SideStore would then never
+        # see a build number change and stop offering updates. Stamp it here,
+        # before prebuild, so it's Expo that carries it into the native
+        # project (same mechanism Expo normally uses for this field).
+        run: |
+          node -e "
+            const fs = require('fs');
+            const cfg = JSON.parse(fs.readFileSync('app.json', 'utf8'));
+            cfg.expo.ios = cfg.expo.ios || {};
+            cfg.expo.ios.buildNumber = '${{ github.run_number }}';
+            fs.writeFileSync('app.json', JSON.stringify(cfg, null, 2));
+          "
+
       - name: Expo prebuild (generate native ios/ project)
         run: npx expo prebuild --platform ios --no-install
 
@@ -67,6 +83,29 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             AD_HOC_CODE_SIGNING_ALLOWED=YES
 
+      - name: Read app version + build + bundle id from the BUILT Info.plist
+        id: appmeta
+        # Read these straight out of the .app that Xcode actually produced,
+        # not out of app.json / a run counter computed independently. Those
+        # two can drift apart (e.g. app.json has no ios.buildNumber, so Expo
+        # prebuild always bakes CFBundleVersion=1 into the native project
+        # regardless of what this workflow later claims) -- and when they do,
+        # SideStore refuses to install: "The downloaded version ... does not
+        # match the build number specified by the source." Reading the real
+        # Info.plist here guarantees source.json can never disagree with the
+        # binary it's describing.
+        run: |
+          cd ios/build/App.xcarchive/Products/Applications
+          APP=$(ls -d *.app | head -1)
+          PLIST="$APP/Info.plist"
+          VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST")
+          BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$PLIST")
+          BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$PLIST")
+          echo "Built app actually reports: version=$VERSION build=$BUILD bundle_id=$BUNDLE_ID"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+          echo "bundle_id=$BUNDLE_ID" >> "$GITHUB_OUTPUT"
+
       - name: Package raw IPA (Payload/*.app zipped, no signing)
         id: package
         run: |
@@ -78,14 +117,6 @@ jobs:
           SIZE=$(stat -f%z ../../../DataServer.ipa)
           echo "Built: $(ls -la ../../../DataServer.ipa)"
           echo "size=$SIZE" >> "$GITHUB_OUTPUT"
-
-      - name: Read app version + bundle id
-        id: appmeta
-        run: |
-          VERSION=$(node -p "require('./app.json').expo.version")
-          BUNDLE_ID=$(node -p "require('./app.json').expo.ios.bundleIdentifier")
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "bundle_id=$BUNDLE_ID" >> "$GITHUB_OUTPUT"
 
       - name: Generate SideStore/AltStore source.json
         run: |
@@ -103,9 +134,9 @@ jobs:
                 "versions": [
                   {
                     "version": "${{ steps.appmeta.outputs.version }}",
-                    "buildVersion": "${{ github.run_number }}",
+                    "buildVersion": "${{ steps.appmeta.outputs.build }}",
                     "date": "$(date -u +%Y-%m-%d)",
-                    "localizedDescription": "Build #${{ github.run_number }} from commit ${{ github.sha }}",
+                    "localizedDescription": "Build ${{ steps.appmeta.outputs.build }} (run #${{ github.run_number }}) from commit ${{ github.sha }}",
                     "downloadURL": "https://github.com/${{ github.repository }}/releases/download/ios-latest/DataServer.ipa",
                     "size": ${{ steps.package.outputs.size }}
                   }
