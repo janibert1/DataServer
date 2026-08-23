@@ -7,8 +7,18 @@ name: Build Unsigned iOS IPA (SideStore sideload)
 # account (verified against Expo's own docs), this sidesteps that entirely
 # by using a real Xcode toolchain on a GitHub-hosted macOS runner instead
 # (unlimited free minutes on a public repo).
+#
+# Also publishes a SideStore/AltStore "source" (source.json + the ipa + the
+# app icon) to a stable-URL GitHub Release, tag `ios-latest`, with its
+# assets overwritten on every run. Add that source.json's raw URL to
+# SideStore once (Browse tab -> paste URL -> Add Source) and every future
+# run of this workflow shows up there as a normal one-tap Update -- no more
+# manually re-downloading and re-importing an .ipa each time.
 on:
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -58,16 +68,70 @@ jobs:
             AD_HOC_CODE_SIGNING_ALLOWED=YES
 
       - name: Package raw IPA (Payload/*.app zipped, no signing)
+        id: package
         run: |
           cd ios/build/App.xcarchive/Products/Applications
           APP=$(ls -d *.app | head -1)
           mkdir Payload
           mv "$APP" Payload/
-          zip -r -y ../../../App-unsigned.ipa Payload
-          echo "Built: $(ls -la ../../../App-unsigned.ipa)"
+          zip -r -y ../../../DataServer.ipa Payload
+          SIZE=$(stat -f%z ../../../DataServer.ipa)
+          echo "Built: $(ls -la ../../../DataServer.ipa)"
+          echo "size=$SIZE" >> "$GITHUB_OUTPUT"
+
+      - name: Read app version + bundle id
+        id: appmeta
+        run: |
+          VERSION=$(node -p "require('./app.json').expo.version")
+          BUNDLE_ID=$(node -p "require('./app.json').expo.ios.bundleIdentifier")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "bundle_id=$BUNDLE_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Generate SideStore/AltStore source.json
+        run: |
+          cat > ios/build/source.json <<EOF
+          {
+            "name": "Jan's DataServer builds",
+            "identifier": "nl.jdries.dataserver.source",
+            "apps": [
+              {
+                "name": "DataServer",
+                "bundleIdentifier": "${{ steps.appmeta.outputs.bundle_id }}",
+                "developerName": "janibert1",
+                "localizedDescription": "Personal DataServer mobile app -- auto-built from the latest commit on master.",
+                "iconURL": "https://github.com/${{ github.repository }}/releases/download/ios-latest/icon.png",
+                "versions": [
+                  {
+                    "version": "${{ steps.appmeta.outputs.version }}",
+                    "buildVersion": "${{ github.run_number }}",
+                    "date": "$(date -u +%Y-%m-%d)",
+                    "localizedDescription": "Build #${{ github.run_number }} from commit ${{ github.sha }}",
+                    "downloadURL": "https://github.com/${{ github.repository }}/releases/download/ios-latest/DataServer.ipa",
+                    "size": ${{ steps.package.outputs.size }}
+                  }
+                ],
+                "appPermissions": { "entitlements": [], "privacy": {} }
+              }
+            ],
+            "news": []
+          }
+          EOF
+          cat ios/build/source.json
 
       - uses: actions/upload-artifact@v4
         with:
           name: DataServer-unsigned-ipa
-          path: app/ios/build/App-unsigned.ipa
+          path: app/ios/build/DataServer.ipa
           retention-days: 14
+
+      - name: Publish to stable-URL release (assets overwritten each run)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ios-latest
+          name: "iOS build (auto-updated, latest run wins)"
+          body: "Personal sideload build for SideStore. Not a real release -- assets here are overwritten on every workflow run. Add source.json's URL as a SideStore source to get one-tap updates."
+          prerelease: true
+          files: |
+            app/ios/build/DataServer.ipa
+            app/ios/build/source.json
+            app/assets/images/icon.png
