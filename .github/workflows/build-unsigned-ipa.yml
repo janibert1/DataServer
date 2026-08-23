@@ -93,6 +93,30 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             AD_HOC_CODE_SIGNING_ALLOWED=YES
 
+      - name: Ad-hoc codesign the app (SideStore needs a real signature to replace)
+        # CODE_SIGNING_ALLOWED=NO during the archive means the built binary
+        # has NO LC_CODE_SIGNATURE load command at all -- not even ad-hoc.
+        # SideStore/AltStore-family installers read the app's *existing*
+        # entitlements out of its current signature to know what to request
+        # in the provisioning profile it generates, then replace that
+        # signature with one from the user's personal-team certificate. With
+        # no signature to read at all, that step has nothing to work from --
+        # App ID registration still succeeds (it only needs the bundle ID
+        # from Info.plist), but the actual install then fails silently.
+        # Fix: ad-hoc sign (`-` = no real certificate/Team ID needed) every
+        # nested component innermost-out, then the outer .app itself.
+        run: |
+          cd ios/build/App.xcarchive/Products/Applications
+          APP=$(ls -d *.app | head -1)
+          find "$APP" \( -name "*.framework" -o -name "*.appex" \) -print0 \
+            | xargs -0 -I{} codesign --force --sign - "{}"
+          codesign --force --deep --sign - "$APP"
+          echo "--- verifying signature ---"
+          codesign -dv --verbose=4 "$APP" 2>&1
+          echo "--- LC_CODE_SIGNATURE present? ---"
+          EXEC=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP/Info.plist")
+          otool -l "$APP/$EXEC" | grep -A2 LC_CODE_SIGNATURE
+
       - name: Read app version + build + bundle id from the BUILT Info.plist
         id: appmeta
         # Read these straight out of the .app that Xcode actually produced,
