@@ -14,7 +14,17 @@ name: Build Unsigned iOS IPA (SideStore sideload)
 # SideStore once (Browse tab -> paste URL -> Add Source) and every future
 # run of this workflow shows up there as a normal one-tap Update -- no more
 # manually re-downloading and re-importing an .ipa each time.
+#
+# Runs on every push to master that touches app/ (this is Jan's own repo, so
+# staying fresh is just "rebuild when the app changes" -- no upstream to
+# sync from, unlike the equivalent Nuvio pipeline), plus workflow_dispatch
+# for a manual rebuild any time.
 on:
+  push:
+    branches: [master]
+    paths:
+      - "app/**"
+      - ".github/workflows/build-unsigned-ipa.yml"
   workflow_dispatch:
 
 permissions:
