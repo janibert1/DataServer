@@ -3,7 +3,7 @@ import { View, Text, TouchableOpacity, ActivityIndicator, Platform } from 'react
 import { SafeAreaView, SafeAreaProvider } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { Maximize2, Minimize2 } from 'lucide-react-native';
+import { Maximize2, Minimize2, ChevronLeft, ChevronRight } from 'lucide-react-native';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { WebView } from 'react-native-webview';
 import * as ScreenOrientation from 'expo-screen-orientation';
@@ -138,8 +138,30 @@ function PreviewContent({
 }
 
 export default function FilePreviewScreen() {
-  const { fileId } = useLocalSearchParams<{ fileId: string; folderId: string }>();
+  const { fileId, fileIds: fileIdsParam } = useLocalSearchParams<{ fileId: string; folderId: string; fileIds?: string }>();
   const router = useRouter();
+
+  // The list this photo/file was opened from (starred/recent/home/folder --
+  // whichever screen the user actually tapped it from), passed as a
+  // comma-joined id list by each of those screens. Matches web's `files`
+  // prop on FilePreviewModal: paging next/prev walks THIS list, not
+  // necessarily this file's parent folder's full contents.
+  const fileIds = fileIdsParam ? fileIdsParam.split(',').filter(Boolean) : [];
+  const currentIndex = fileIds.indexOf(fileId);
+  const hasPrev = currentIndex > 0;
+  const hasNext = currentIndex >= 0 && currentIndex < fileIds.length - 1;
+
+  function goPrev() {
+    if (!hasPrev) return;
+    // setParams (not push/replace) so paging through photos stays a single
+    // stack entry -- one back-tap exits the viewer entirely, same as web's
+    // modal never pushing new history per photo.
+    router.setParams({ fileId: fileIds[currentIndex - 1] });
+  }
+  function goNext() {
+    if (!hasNext) return;
+    router.setParams({ fileId: fileIds[currentIndex + 1] });
+  }
   const [showInfo, setShowInfo] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -269,6 +291,30 @@ export default function FilePreviewScreen() {
             <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
               <ActivityIndicator size="large" color="white" />
             </View>
+          )}
+
+          {/* Prev/next — mirrors web's ChevronLeft/ChevronRight paging
+              through the same list this screen was opened from (see fileIds
+              above). Overlaid on the content edges rather than web's
+              side-by-side flex layout: there's no spare width to give up on
+              a phone screen without shrinking the actual preview. Hidden
+              along with the rest of the chrome so they don't obscure a
+              maximized image, and while there's nothing to page to. */}
+          {chromeVisible && hasPrev && (
+            <TouchableOpacity
+              onPress={goPrev}
+              style={{ position: 'absolute', left: 8, top: '50%', marginTop: -20, width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center' }}
+            >
+              <ChevronLeft size={22} color="white" />
+            </TouchableOpacity>
+          )}
+          {chromeVisible && hasNext && (
+            <TouchableOpacity
+              onPress={goNext}
+              style={{ position: 'absolute', right: 8, top: '50%', marginTop: -20, width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center' }}
+            >
+              <ChevronRight size={22} color="white" />
+            </TouchableOpacity>
           )}
         </View>
 

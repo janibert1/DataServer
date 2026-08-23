@@ -106,7 +106,7 @@ export default function MyDriveScreen() {
   }, []);
 
   function handleFilePress(file: DriveFile) {
-    router.push({ pathname: '/file-preview', params: { fileId: file.id, folderId: file.folderId ?? '' } });
+    router.push({ pathname: '/file-preview', params: { fileId: file.id, folderId: file.folderId ?? '', fileIds: files.map((f) => f.id).join(',') } });
   }
 
   function handleFileActions(file: DriveFile) {

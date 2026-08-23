@@ -260,6 +260,17 @@ export function ZoomableImage({ fileId, fullUrl, quality, chromeVisible, onImage
                 style={{ width: '100%', height: '100%' }}
                 contentFit="contain"
                 transition={200}
+                // expo-image defaults to downscaling the decoded bitmap to
+                // match the view's rendered size (boxSize, locked BEFORE any
+                // zoom) -- fine for a static image, but this component's
+                // zoom is a GPU transform on that same fixed-size bitmap, so
+                // pinching in just upscales an already-downsampled image and
+                // looks soft regardless of which quality tier was fetched.
+                // Confirmed via expo-image's own docs (Image.types.d.ts):
+                // "Turning off this functionality... would result in...
+                // end-users would always have access to the highest
+                // possible asset quality" -- exactly what a zoom viewer needs.
+                allowDownscaling={false}
                 onLoad={(e) => {
                   if (!boxSize && e.source?.width && e.source?.height) {
                     lockBoxSize(e.source.width, e.source.height);

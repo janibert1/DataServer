@@ -80,7 +80,7 @@ export default function FolderScreen() {
   const canUpload = permission !== 'VIEWER' && permission !== 'DOWNLOADER';
 
   function handleFilePress(file: DriveFile) {
-    router.push({ pathname: '/file-preview', params: { fileId: file.id, folderId: id } });
+    router.push({ pathname: '/file-preview', params: { fileId: file.id, folderId: id, fileIds: files.map((f) => f.id).join(',') } });
   }
 
   function handleFileActions(file: DriveFile) {

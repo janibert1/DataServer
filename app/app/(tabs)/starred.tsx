@@ -19,7 +19,10 @@ export default function StarredScreen() {
   const files = data?.files ?? [];
 
   function handleFilePress(file: DriveFile) {
-    router.push({ pathname: '/file-preview', params: { fileId: file.id, folderId: file.folderId ?? '' } });
+    // fileIds: the current list's own file order, so the preview screen's
+    // prev/next buttons page through what's actually on screen (starred
+    // files, not that file's parent folder's contents).
+    router.push({ pathname: '/file-preview', params: { fileId: file.id, folderId: file.folderId ?? '', fileIds: files.map((f) => f.id).join(',') } });
   }
 
   function handleFileActions(file: DriveFile) {
