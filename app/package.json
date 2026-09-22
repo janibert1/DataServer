@@ -28,6 +28,7 @@
     "expo-image-picker": "~17.0.10",
     "expo-linear-gradient": "~15.0.7",
     "expo-linking": "~8.0.11",
+    "expo-notifications": "^57.0.20",
     "expo-router": "~6.0.23",
     "expo-screen-orientation": "^55.0.10-canary-20260327-0789fbc",
     "expo-secure-store": "~15.0.8",

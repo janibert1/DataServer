@@ -16,6 +16,7 @@ LogBox.ignoreLogs(['Each child in a list should have a unique "key" prop']);
 
 import { useAuthStore } from '@/stores/auth-store';
 import { useAuthInit } from '@/lib/hooks/use-auth';
+import { usePushRegistration } from '@/lib/hooks/use-push-registration';
 import { UploadProgress } from '@/components/file/upload-progress';
 import { DownloadProgress } from '@/components/file/download-progress';
 import { useUploadStore } from '@/stores/upload-store';
@@ -105,6 +106,8 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 }
 
 export default function RootLayout() {
+  usePushRegistration();
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       {/* App-wide safe-area insets. Without this, any screen or modal using

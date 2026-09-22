@@ -15,10 +15,14 @@
         "NSCameraUsageDescription": "Used to take photos for upload",
         "NSPhotoLibraryUsageDescription": "Used to select photos and videos for upload",
         "NSDocumentsFolderUsageDescription": "Used to select files for upload"
+      },
+      "entitlements": {
+        "aps-environment": "production"
       }
     },
     "plugins": [
       "expo-router",
+      "expo-notifications",
       [
         "expo-splash-screen",
         {
