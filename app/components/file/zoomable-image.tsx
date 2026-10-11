@@ -43,19 +43,23 @@ interface Props {
   onImageFullyLoaded?: () => void;
   onSwipePrevious?: () => void;
   onSwipeNext?: () => void;
+  canSwipePrevious?: boolean;
+  canSwipeNext?: boolean;
   cachedThumbnailUrl?: string;
 }
 
 export function ZoomableImage({
-  fileId, fullUrl, quality, chromeVisible, onImageTap, onImageFullyLoaded, onSwipePrevious, onSwipeNext, cachedThumbnailUrl,
+  fileId, fullUrl, quality, chromeVisible, onImageTap, onImageFullyLoaded, onSwipePrevious, onSwipeNext, canSwipePrevious = false, canSwipeNext = false, cachedThumbnailUrl,
 }: Props) {
   const [src, setSrc] = useState<string | null>(null);
   const [isOriginal, setIsOriginal] = useState(false);
+  const [showLoader, setShowLoader] = useState(false);
   const [boxSize, setBoxSize] = useState<{ w: number; h: number } | null>(null);
   const [scaleLabel, setScaleLabel] = useState(100);
   const naturalDimsRef = useRef<{ w: number; h: number } | null>(null);
   const containerSizeRef = useRef<{ w: number; h: number } | null>(null);
   const fullyLoadedFileRef = useRef<string | null>(null);
+  const hasVisibleImageRef = useRef(false);
 
   // Zoom/pan transform -- shared values so pinch/pan gestures can read+write
   // them on the UI thread every frame with no JS-thread round trip (same
@@ -66,6 +70,12 @@ export function ZoomableImage({
   const translateY = useSharedValue(0);
   const savedTranslateX = useSharedValue(0);
   const savedTranslateY = useSharedValue(0);
+  // At 1×, this is deliberately separate from image panning: it is the
+  // whole-photo page transition. Keeping it on the UI thread makes the
+  // image stay attached to the finger rather than waiting for navigation at
+  // gesture end.
+  const pageTranslateX = useSharedValue(0);
+  const pendingPageDirection = useSharedValue(0);
   // The pinch focal point is stored at activation. Keeping the image point
   // beneath that point stable is what makes a pinch zoom into the place the
   // user actually pinched rather than towards the middle of the screen.
@@ -153,6 +163,8 @@ export function ZoomableImage({
   useEffect(() => {
     setSrc(null);
     setIsOriginal(false);
+    setShowLoader(false);
+    hasVisibleImageRef.current = false;
     setBoxSize(null);
     naturalDimsRef.current = null;
     scale.value = 1;
@@ -163,6 +175,24 @@ export function ZoomableImage({
     savedTranslateY.value = 0;
     setScaleLabel(100);
     fullyLoadedFileRef.current = null;
+
+    // A prefetched neighbor is normally available before this transition
+    // reaches the centre. For an uncached/opening image, keep the canvas
+    // quiet for the first moment instead of flashing a busy spinner.
+    const loaderTimer = setTimeout(() => {
+      if (!hasVisibleImageRef.current) setShowLoader(true);
+    }, 1000);
+
+    // Complete a drag as a spatial transition: the departed photo moved off
+    // one edge, so the next one begins at the opposite edge and glides in.
+    // Arrow navigation intentionally remains an immediate swap.
+    if (pendingPageDirection.value !== 0) {
+      pageTranslateX.value = -pendingPageDirection.value * cW.value;
+      pendingPageDirection.value = 0;
+      pageTranslateX.value = withTiming(0, { duration: 180 });
+    } else {
+      pageTranslateX.value = 0;
+    }
 
     let cancelled = false;
     if (cachedThumbnailUrl) {
@@ -175,7 +205,10 @@ export function ZoomableImage({
         .then((data) => { if (!cancelled) setSrc((cur) => cur ?? data.thumbnailUrl); })
         .catch(() => {});
     }
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      clearTimeout(loaderTimer);
+    };
   }, [fileId]);
 
   function markFullyLoaded() {
@@ -266,7 +299,13 @@ export function ZoomableImage({
   const pan = Gesture.Pan()
     .maxPointers(1)
     .onUpdate((e) => {
-      if (savedScale.value <= 1) return;
+      if (savedScale.value <= MIN_SCALE) {
+        // A little resistance at either end tells the user there is no
+        // further photo, without making the image feel stuck.
+        const hasDestination = e.translationX < 0 ? canSwipeNext : canSwipePrevious;
+        pageTranslateX.value = e.translationX * (hasDestination ? 0.9 : 0.22);
+        return;
+      }
       const clamped = clampTranslate(savedScale.value, savedTranslateX.value + e.translationX, savedTranslateY.value + e.translationY);
       translateX.value = clamped.x;
       translateY.value = clamped.y;
@@ -276,12 +315,21 @@ export function ZoomableImage({
       // horizontal drag is therefore a photo-page gesture; once zoomed in,
       // the exact same gesture remains ordinary image panning instead.
       if (savedScale.value <= MIN_SCALE) {
-        const isHorizontal = Math.abs(e.translationX) > 56
+        const threshold = Math.min(72, Math.max(56, cW.value * 0.18));
+        const isHorizontal = Math.abs(e.translationX) > threshold
           && Math.abs(e.translationX) > Math.abs(e.translationY) * 1.25;
-        if (isHorizontal && e.translationX < 0 && onSwipeNext) {
-          runOnJS(onSwipeNext)();
-        } else if (isHorizontal && e.translationX > 0 && onSwipePrevious) {
-          runOnJS(onSwipePrevious)();
+        if (isHorizontal && e.translationX < 0 && canSwipeNext && onSwipeNext) {
+          pendingPageDirection.value = -1;
+          pageTranslateX.value = withTiming(-cW.value, { duration: 160 }, (finished) => {
+            if (finished) runOnJS(onSwipeNext)();
+          });
+        } else if (isHorizontal && e.translationX > 0 && canSwipePrevious && onSwipePrevious) {
+          pendingPageDirection.value = 1;
+          pageTranslateX.value = withTiming(cW.value, { duration: 160 }, (finished) => {
+            if (finished) runOnJS(onSwipePrevious)();
+          });
+        } else {
+          pageTranslateX.value = withTiming(0, { duration: 180 });
         }
         return;
       }
@@ -293,6 +341,7 @@ export function ZoomableImage({
 
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [
+      { translateX: pageTranslateX.value },
       { translateX: translateX.value },
       { translateY: translateY.value },
       { scale: scale.value },
@@ -317,7 +366,7 @@ export function ZoomableImage({
         <GestureDetector gesture={composed}>
           <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
             {!src ? (
-              <ActivityIndicator size="large" color="white" />
+              showLoader ? <ActivityIndicator size="large" color="white" /> : null
             ) : (
             <Animated.View style={[boxSize ? { width: boxSize.w, height: boxSize.h } : { width: '100%', height: '100%' }, animatedStyle]}>
               <Image
@@ -337,6 +386,11 @@ export function ZoomableImage({
                 // possible asset quality" -- exactly what a zoom viewer needs.
                 allowDownscaling={false}
                 onLoad={(e) => {
+                  // A URL being assigned does not guarantee decoded pixels
+                  // are already on screen. This is the point at which the
+                  // delayed loader may safely disappear.
+                  hasVisibleImageRef.current = true;
+                  setShowLoader(false);
                   if (!boxSize && e.source?.width && e.source?.height) {
                     lockBoxSize(e.source.width, e.source.height);
                   }

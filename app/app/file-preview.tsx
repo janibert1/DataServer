@@ -54,7 +54,7 @@ function AudioPreview({ uri }: { uri: string }) {
 }
 
 function PreviewContent({
-  file, previewUrl, quality, chromeVisible, onImageTap, onImageFullyLoaded, onSwipePrevious, onSwipeNext, cachedThumbnailUrl,
+  file, previewUrl, quality, chromeVisible, onImageTap, onImageFullyLoaded, onSwipePrevious, onSwipeNext, canSwipePrevious, canSwipeNext, cachedThumbnailUrl,
 }: {
   file: DriveFile;
   previewUrl: string | null;
@@ -64,6 +64,8 @@ function PreviewContent({
   onImageFullyLoaded: () => void;
   onSwipePrevious: () => void;
   onSwipeNext: () => void;
+  canSwipePrevious: boolean;
+  canSwipeNext: boolean;
   cachedThumbnailUrl?: string;
 }) {
   if (!previewUrl) {
@@ -89,6 +91,8 @@ function PreviewContent({
         onImageFullyLoaded={onImageFullyLoaded}
         onSwipePrevious={onSwipePrevious}
         onSwipeNext={onSwipeNext}
+        canSwipePrevious={canSwipePrevious}
+        canSwipeNext={canSwipeNext}
         cachedThumbnailUrl={cachedThumbnailUrl}
       />
     );
@@ -341,6 +345,8 @@ export default function FilePreviewScreen() {
               onImageFullyLoaded={handleImageFullyLoaded}
               onSwipePrevious={goPrev}
               onSwipeNext={goNext}
+              canSwipePrevious={hasPrev}
+              canSwipeNext={hasNext}
               cachedThumbnailUrl={cachedThumbnails[file.id]}
             />
           ) : (
