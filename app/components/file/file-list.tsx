@@ -1,4 +1,4 @@
-import { FlatList, View, RefreshControl, Platform } from 'react-native';
+import { FlatList, View, RefreshControl } from 'react-native';
 import { useRouter } from 'expo-router';
 import { FileItem } from './file-item';
 import { FolderItem } from './folder-item';
@@ -69,14 +69,6 @@ export function FileList({
       data={items}
       numColumns={numColumns}
       keyExtractor={(item) => `${item.type}-${item.data.id}`}
-      // Keep the native view hierarchy and image decode work bounded while
-      // flicking through a large photo folder.  The defaults are tuned for
-      // text feeds; a two-column image grid needs a smaller render window.
-      initialNumToRender={isGrid ? 12 : 10}
-      maxToRenderPerBatch={isGrid ? 8 : 10}
-      windowSize={5}
-      updateCellsBatchingPeriod={50}
-      removeClippedSubviews={Platform.OS === 'android'}
       contentContainerStyle={isGrid ? { padding: 12, gap: 12 } : undefined}
       columnWrapperStyle={isGrid ? { gap: 12 } : undefined}
       ListHeaderComponent={ListHeaderComponent}
