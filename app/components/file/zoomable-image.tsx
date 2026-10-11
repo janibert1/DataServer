@@ -40,15 +40,21 @@ interface Props {
   quality: 'thumbnail' | 'preview' | 'original' | null;
   chromeVisible: boolean;
   onImageTap: () => void;
+  onImageFullyLoaded?: () => void;
+  onSwipePrevious?: () => void;
+  onSwipeNext?: () => void;
 }
 
-export function ZoomableImage({ fileId, fullUrl, quality, chromeVisible, onImageTap }: Props) {
+export function ZoomableImage({
+  fileId, fullUrl, quality, chromeVisible, onImageTap, onImageFullyLoaded, onSwipePrevious, onSwipeNext,
+}: Props) {
   const [src, setSrc] = useState<string | null>(null);
   const [isOriginal, setIsOriginal] = useState(false);
   const [boxSize, setBoxSize] = useState<{ w: number; h: number } | null>(null);
   const [scaleLabel, setScaleLabel] = useState(100);
   const naturalDimsRef = useRef<{ w: number; h: number } | null>(null);
   const containerSizeRef = useRef<{ w: number; h: number } | null>(null);
+  const fullyLoadedFileRef = useRef<string | null>(null);
 
   // Zoom/pan transform -- shared values so pinch/pan gestures can read+write
   // them on the UI thread every frame with no JS-thread round trip (same
@@ -155,6 +161,7 @@ export function ZoomableImage({ fileId, fullUrl, quality, chromeVisible, onImage
     savedTranslateX.value = 0;
     savedTranslateY.value = 0;
     setScaleLabel(100);
+    fullyLoadedFileRef.current = null;
 
     let cancelled = false;
     getFileThumbnailUrl(fileId)
@@ -162,6 +169,15 @@ export function ZoomableImage({ fileId, fullUrl, quality, chromeVisible, onImage
       .catch(() => {});
     return () => { cancelled = true; };
   }, [fileId]);
+
+  function markFullyLoaded() {
+    // This may be reached through either the direct-original path or the
+    // preview-to-original upgrade. Only announce it once per file, so the
+    // viewer's neighbor prefetch does not restart on normal re-renders.
+    if (fullyLoadedFileRef.current === fileId) return;
+    fullyLoadedFileRef.current = fileId;
+    onImageFullyLoaded?.();
+  }
 
   // Chases preview -> real original, same sequencing as web's effect (see
   // that file's comment for the full "why" -- previewKey is a genuine lossy
@@ -174,11 +190,16 @@ export function ZoomableImage({ fileId, fullUrl, quality, chromeVisible, onImage
         setSrc(fullUrl);
         if (quality === 'original') {
           setIsOriginal(true);
+          markFullyLoaded();
           return;
         }
         getFileOriginalUrl(fileId)
           .then((data) => Image.prefetch(data.originalUrl).then(() => {
-            if (!cancelled) { setSrc(data.originalUrl); setIsOriginal(true); }
+            if (!cancelled) {
+              setSrc(data.originalUrl);
+              setIsOriginal(true);
+              markFullyLoaded();
+            }
           }))
           .catch(() => {});
       })
@@ -242,7 +263,20 @@ export function ZoomableImage({ fileId, fullUrl, quality, chromeVisible, onImage
       translateX.value = clamped.x;
       translateY.value = clamped.y;
     })
-    .onEnd(() => {
+    .onEnd((e) => {
+      // At the natural 1× scale the image is not pannable. A deliberate
+      // horizontal drag is therefore a photo-page gesture; once zoomed in,
+      // the exact same gesture remains ordinary image panning instead.
+      if (savedScale.value <= MIN_SCALE) {
+        const isHorizontal = Math.abs(e.translationX) > 56
+          && Math.abs(e.translationX) > Math.abs(e.translationY) * 1.25;
+        if (isHorizontal && e.translationX < 0 && onSwipeNext) {
+          runOnJS(onSwipeNext)();
+        } else if (isHorizontal && e.translationX > 0 && onSwipePrevious) {
+          runOnJS(onSwipePrevious)();
+        }
+        return;
+      }
       savedTranslateX.value = translateX.value;
       savedTranslateY.value = translateY.value;
     });

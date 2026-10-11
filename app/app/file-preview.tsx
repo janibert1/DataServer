@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, Platform } from 'react-native';
 import { SafeAreaView, SafeAreaProvider } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
@@ -6,9 +6,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { Maximize2, Minimize2, ChevronLeft, ChevronRight } from 'lucide-react-native';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { WebView } from 'react-native-webview';
+import { Image } from 'expo-image';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { useFile } from '@/lib/hooks/use-files';
-import { getFilePreviewUrl, getFileDownloadUrl } from '@/lib/api/files';
+import { getFilePreviewUrl, getFileDownloadUrl, getFileThumbnailUrl } from '@/lib/api/files';
 import { downloadAndShareFile } from '@/lib/hooks/use-download';
 import { formatFileSize, formatDate } from '@/lib/format';
 import { FileIcon } from '@/components/file/file-icon';
@@ -53,13 +54,16 @@ function AudioPreview({ uri }: { uri: string }) {
 }
 
 function PreviewContent({
-  file, previewUrl, quality, chromeVisible, onImageTap,
+  file, previewUrl, quality, chromeVisible, onImageTap, onImageFullyLoaded, onSwipePrevious, onSwipeNext,
 }: {
   file: DriveFile;
   previewUrl: string | null;
   quality: 'thumbnail' | 'preview' | 'original' | null;
   chromeVisible: boolean;
   onImageTap: () => void;
+  onImageFullyLoaded: () => void;
+  onSwipePrevious: () => void;
+  onSwipeNext: () => void;
 }) {
   if (!previewUrl) {
     return (
@@ -81,6 +85,9 @@ function PreviewContent({
         quality={quality}
         chromeVisible={chromeVisible}
         onImageTap={onImageTap}
+        onImageFullyLoaded={onImageFullyLoaded}
+        onSwipePrevious={onSwipePrevious}
+        onSwipeNext={onSwipeNext}
       />
     );
   }
@@ -174,6 +181,46 @@ export default function FilePreviewScreen() {
   // chrome), toggled the same way most native photo viewers do it: the
   // button, or a tap on the image itself.
   const [chromeVisible, setChromeVisible] = useState(true);
+  const [fullyLoadedImageId, setFullyLoadedImageId] = useState<string | null>(null);
+  const prefetchedThumbnailIds = useRef(new Set<string>());
+  const { data } = useFile(fileId);
+  const file = data?.file;
+
+  const handleImageFullyLoaded = useCallback(() => {
+    setFullyLoadedImageId(fileId);
+  }, [fileId]);
+
+  // Keep a small bidirectional thumbnail runway warm, but never contend with
+  // the displayed image: this begins only after its original-quality asset
+  // has decoded. expo-image keeps prefetched thumbnails in memory and disk,
+  // making an adjacent swipe feel immediate even after a brief backgrounding.
+  useEffect(() => {
+    if (!file || !file.mimeType.startsWith('image/') || fullyLoadedImageId !== fileId || currentIndex < 0) return;
+
+    const nearbyIds = [
+      ...fileIds.slice(Math.max(0, currentIndex - 5), currentIndex),
+      ...fileIds.slice(currentIndex + 1, currentIndex + 6),
+    ].filter((id) => !prefetchedThumbnailIds.current.has(id));
+    let cancelled = false;
+
+    async function prefetchNearbyThumbnails() {
+      // Deliberately serial: thumbnails stay lightweight and this avoids
+      // creating a burst that competes with the newly-selected full image.
+      for (const id of nearbyIds) {
+        try {
+          const { thumbnailUrl } = await getFileThumbnailUrl(id);
+          if (cancelled) return;
+          await Image.prefetch(thumbnailUrl, 'memory-disk');
+          if (cancelled) return;
+          prefetchedThumbnailIds.current.add(id);
+        } catch {
+          // A deleted or inaccessible neighbor should not interrupt the rest.
+        }
+      }
+    }
+    void prefetchNearbyThumbnails();
+    return () => { cancelled = true; };
+  }, [file, fileId, fullyLoadedImageId, currentIndex, fileIdsParam]);
 
   // Unlock orientation for preview, lock back to portrait on unmount
   useEffect(() => {
@@ -182,9 +229,6 @@ export default function FilePreviewScreen() {
       ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
     };
   }, []);
-
-  const { data } = useFile(fileId);
-  const file = data?.file;
 
   // Fetches previewUrl, and -- if still only the thumbnail stand-in --
   // keeps re-checking every few seconds so a slow backfill/upload that
@@ -286,6 +330,9 @@ export default function FilePreviewScreen() {
               quality={quality}
               chromeVisible={chromeVisible}
               onImageTap={() => setChromeVisible((v) => !v)}
+              onImageFullyLoaded={handleImageFullyLoaded}
+              onSwipePrevious={goPrev}
+              onSwipeNext={goNext}
             />
           ) : (
             <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
