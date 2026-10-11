@@ -571,13 +571,24 @@ export async function getFilePreviewUrl(id: string): Promise<{ previewUrl: strin
   return res.data;
 }
 
+const thumbnailCache = new Map<string, Promise<{ thumbnailUrl: string; mimeType: string }>>();
+
 // Deliberately separate from getFilePreviewUrl -- /preview now serves the
 // large 2000px preview for the full-screen modal, this stays on the small
 // 400px thumbnail for grid tiles (and as the fast placeholder the modal
 // shows first, see FilePreviewModal).
-export async function getFileThumbnailUrl(id: string): Promise<{ thumbnailUrl: string; mimeType: string }> {
-  const res = await api.get(`/files/${id}/thumbnail`, { timeout: 15000 });
-  return res.data;
+export function getFileThumbnailUrl(id: string): Promise<{ thumbnailUrl: string; mimeType: string }> {
+  let cached = thumbnailCache.get(id);
+  if (!cached) {
+    cached = api.get(`/files/${id}/thumbnail`, { timeout: 15000 })
+      .then((res) => res.data)
+      .catch((err) => {
+        thumbnailCache.delete(id);
+        throw err;
+      });
+    thumbnailCache.set(id, cached);
+  }
+  return cached;
 }
 
 // The real, unprocessed original -- distinct from both getFilePreviewUrl

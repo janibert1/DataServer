@@ -228,14 +228,18 @@ authRouter.get('/me', requireAuth, (req: Request, res: Response) => {
 // Bearer token via a dataserver:// deep link instead of relying on the
 // cookie at all.
 authRouter.get('/google', (req: Request, res: Response, next: any) => {
-  if (req.query.mobile === '1') (req.session as any).mobileAuthFlow = true;
-  passport.authenticate('google', { scope: ['profile', 'email'] })(req, res, next);
+  const isMobile = req.query.mobile === '1';
+  if (isMobile) (req.session as any).mobileAuthFlow = true;
+  passport.authenticate('google', {
+    scope: ['profile', 'email'],
+    state: isMobile ? 'mobile' : undefined,
+  })(req, res, next);
 });
 
 authRouter.get(
   '/google/callback',
   (req: Request, res: Response, next: any) => {
-    const isMobile = !!(req.session as any).mobileAuthFlow;
+    const isMobile = !!(req.session as any).mobileAuthFlow || req.query.state === 'mobile';
     delete (req.session as any).mobileAuthFlow;
 
     passport.authenticate('google', async (err: any, user: any, info: any) => {

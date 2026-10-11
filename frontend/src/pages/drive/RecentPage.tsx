@@ -59,7 +59,9 @@ export function RecentPage() {
       {previewFile && (
         <FilePreviewModal
           file={previewFile}
+          files={allFiles}
           onClose={() => setPreviewFile(null)}
+          onSelectFile={setPreviewFile}
           onNext={() => previewIndex < allFiles.length - 1 && setPreviewFile(allFiles[previewIndex + 1])}
           onPrev={() => previewIndex > 0 && setPreviewFile(allFiles[previewIndex - 1])}
           hasNext={previewIndex < allFiles.length - 1}

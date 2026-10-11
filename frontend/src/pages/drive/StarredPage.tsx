@@ -150,7 +150,9 @@ export function StarredPage() {
         return (
           <FilePreviewModal
             file={previewFile}
+            files={files}
             onClose={() => setPreviewFile(null)}
+            onSelectFile={setPreviewFile}
             onNext={() => previewIndex < files.length - 1 && setPreviewFile(files[previewIndex + 1])}
             onPrev={() => previewIndex > 0 && setPreviewFile(files[previewIndex - 1])}
             hasNext={previewIndex < files.length - 1}

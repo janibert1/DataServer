@@ -1,6 +1,20 @@
 import { Fragment, useState, useEffect, useRef, WheelEvent, MouseEvent, PointerEvent as ReactPointerEvent } from 'react';
 import { Dialog, Transition } from '@headlessui/react';
-import { X, Download, ChevronLeft, ChevronRight, ExternalLink, Info, Maximize2, Minimize2, ZoomIn, ZoomOut } from 'lucide-react';
+import {
+  X,
+  Download,
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
+  Info,
+  Maximize2,
+  Minimize2,
+  ZoomIn,
+  ZoomOut,
+  RotateCw,
+  Images,
+  Maximize,
+} from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { DriveFile } from '../../types';
 import { getFileDownloadUrl, getFilePreviewUrl, getFileThumbnailUrl, getFileOriginalUrl } from '../../hooks/useFiles';
@@ -16,19 +30,9 @@ interface Props {
   onPrev?: () => void;
   hasNext?: boolean;
   hasPrev?: boolean;
+  onSelectFile?: (file: DriveFile) => void;
 }
 
-
-// A plain <video src={previewUrl}> relies on the browser noticing the src
-// attribute changed and kicking off its media load algorithm on its own.
-// In practice (confirmed live: zero 'loadstart' events, zero resource-timing
-// entries for the video, readyState stuck at HAVE_NOTHING indefinitely,
-// despite a valid currentSrc) that notice-and-reload behavior is not
-// reliable across renders in this app -- the browser never actually
-// requests the media. Explicitly calling videoEl.load() forces the load
-// algorithm to run regardless of whether the browser detected the src
-// mutation on its own; this is the standard fix for this exact class of
-// "React <video> never starts loading" symptom.
 function VideoPlayer({ previewUrl }: { previewUrl: string }) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -41,23 +45,15 @@ function VideoPlayer({ previewUrl }: { previewUrl: string }) {
       ref={videoRef}
       src={previewUrl}
       controls
-      className="max-w-full rounded-lg bg-black"
-      style={{ maxHeight: 'calc(85vh - 120px)' }}
+      className="max-w-full max-h-full rounded-lg bg-black object-contain"
     >
       Your browser does not support video playback.
     </video>
   );
 }
 
-// Shows the small thumbnail immediately (already resolved by the time the
-// modal opens most of the time -- FileGrid fetched it for the tile), then
-// swaps to the full-resolution preview once it loads. Deliberately a single
-// <img> element whose `src` is mutated in place rather than two elements or
-// a remount keyed on load state -- if the visitor has already pinch-zoomed
-// the low-res image, the browser's zoom/pan transform lives on that DOM
-// node, and only survives the quality swap if the node itself never changes.
 const MIN_SCALE = 1;
-const MAX_SCALE = 6;
+const MAX_SCALE = 8;
 const DOUBLE_TAP_SCALE = 2.5;
 
 function clamp(n: number, min: number, max: number) {
@@ -68,77 +64,86 @@ function dist(a: PointerEvent, b: PointerEvent) {
   return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
 }
 
-function ProgressiveImage({ fileId, fullUrl, quality, alt, fullscreen }: { fileId: string; fullUrl: string; quality: 'thumbnail' | 'preview' | 'original' | null; alt: string; fullscreen: boolean }) {
-  // fullUrl is already resolved by the parent's effect (that's why this
-  // component exists at all) -- only the thumbnail needs its own fetch here.
+interface ProgressiveImageProps {
+  fileId: string;
+  fullUrl: string;
+  quality: 'thumbnail' | 'preview' | 'original' | null;
+  alt: string;
+  fullscreen: boolean;
+  chromeVisible: boolean;
+  onToggleChrome: () => void;
+  onNext?: () => void;
+  onPrev?: () => void;
+}
+
+function ProgressiveImage({
+  fileId,
+  fullUrl,
+  quality,
+  alt,
+  fullscreen,
+  chromeVisible,
+  onToggleChrome,
+  onNext,
+  onPrev,
+}: ProgressiveImageProps) {
   const [src, setSrc] = useState<string | null>(null);
-
-  // True once the actual, unprocessed original file (not the 2000px/q85
-  // WebP re-encode previewKey produces) is what's on screen -- see the
-  // fullUrl effect below for the 3-stage progressive load this drives.
   const [isOriginal, setIsOriginal] = useState(false);
+  const [rotation, setRotation] = useState(0);
 
-  // Every tier (thumbnail/preview/original) shares the same aspect ratio but
-  // has wildly different intrinsic pixel dimensions -- with no explicit box
-  // size, the <img> naturally resizes itself larger on every quality
-  // upgrade (400px wide -> 2000px -> the real original), which reads as the
-  // photo visibly jumping in physical size mid-transition. Locking a pixel
-  // box the first time any tier loads, from whichever container space is
-  // available right then, keeps every later swap purely a quality change.
-  const [boxSize, setBoxSize] = useState<{ w: number; h: number } | null>(null);
-  const naturalDimsRef = useRef<{ w: number; h: number } | null>(null);
-
-  const lockBoxSize = (naturalW: number, naturalH: number) => {
-    naturalDimsRef.current = { w: naturalW, h: naturalH };
-    const container = containerRef.current;
-    if (!container) return;
-    const availW = container.clientWidth;
-    const availH = container.clientHeight;
-    const ratio = naturalW / naturalH;
-    let w = availW;
-    let h = availW / ratio;
-    if (h > availH) {
-      h = availH;
-      w = availH * ratio;
-    }
-    setBoxSize({ w, h });
-  };
-
-  // Pan/zoom state. Deliberately plain refs+manual style writes (not React
-  // state) for the per-frame transform -- pointermove fires far faster than
-  // a comfortable React re-render rate, and this avoids fighting React over
-  // who owns the transform during an active drag/pinch.
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const scaleRef = useRef(1);
   const posRef = useRef({ x: 0, y: 0 });
-  const [scale, setScale] = useState(1); // mirrored into state only to drive the zoom-controls UI
+  const [scale, setScale] = useState(1);
+
+  const naturalDimsRef = useRef<{ w: number; h: number } | null>(null);
+  const containerDimsRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
 
   const pointers = useRef(new Map<number, PointerEvent>());
   const pinchStartDist = useRef<number | null>(null);
   const pinchStartScale = useRef(1);
   const dragStart = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
+  const dragDistance = useRef(0);
 
-  // Fades in on any zoom action, back out after a second of no further
-  // zooming (not panning -- per spec this tracks zoom activity specifically).
   const [controlsVisible, setControlsVisible] = useState(false);
   const hideControlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bumpControls = () => {
     setControlsVisible(true);
     if (hideControlsTimer.current) clearTimeout(hideControlsTimer.current);
-    hideControlsTimer.current = setTimeout(() => setControlsVisible(false), 1000);
+    hideControlsTimer.current = setTimeout(() => setControlsVisible(false), 2000);
   };
   useEffect(() => () => { if (hideControlsTimer.current) clearTimeout(hideControlsTimer.current); }, []);
 
-  // Keeps the pan position from ever revealing empty space past the image's
-  // own (scaled) edges -- without this, a drag at high zoom can push the
-  // whole image out of the viewport with no way back short of the reset button.
+  // Update container dimensions with ResizeObserver
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        containerDimsRef.current = {
+          w: entry.contentRect.width,
+          h: entry.contentRect.height,
+        };
+        if (scaleRef.current > 1) {
+          clampPos(scaleRef.current);
+          applyTransform(false);
+        }
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
   const clampPos = (s: number) => {
     const img = imgRef.current;
     const container = containerRef.current;
     if (!img || !container) return;
-    const scaledW = img.offsetWidth * s;
-    const scaledH = img.offsetHeight * s;
+    const isRotated = rotation % 180 !== 0;
+    const renderW = isRotated ? img.offsetHeight : img.offsetWidth;
+    const renderH = isRotated ? img.offsetWidth : img.offsetHeight;
+    const scaledW = renderW * s;
+    const scaledH = renderH * s;
     const rect = container.getBoundingClientRect();
     const maxX = Math.max(0, (scaledW - rect.width) / 2);
     const maxY = Math.max(0, (scaledH - rect.height) / 2);
@@ -151,8 +156,8 @@ function ProgressiveImage({ fileId, fullUrl, quality, alt, fullscreen }: { fileI
   const applyTransform = (animate = false) => {
     const el = imgRef.current;
     if (!el) return;
-    el.style.transition = animate ? 'transform 0.2s ease-out' : 'none';
-    el.style.transform = `translate(${posRef.current.x}px, ${posRef.current.y}px) scale(${scaleRef.current})`;
+    el.style.transition = animate ? 'transform 0.2s cubic-bezier(0.16, 1, 0.3, 1)' : 'none';
+    el.style.transform = `translate(${posRef.current.x}px, ${posRef.current.y}px) scale(${scaleRef.current}) rotate(${rotation}deg)`;
     el.style.cursor = scaleRef.current > 1 ? 'grab' : 'zoom-in';
   };
 
@@ -166,13 +171,28 @@ function ProgressiveImage({ fileId, fullUrl, quality, alt, fullscreen }: { fileI
     bumpControls();
   };
 
-  // Full identity reset -- only when actually navigating to a different
-  // photo. Resets zoom/pan and goes back to the fast thumbnail placeholder.
+  const rotateImage = () => {
+    setRotation((r) => (r + 90) % 360);
+    bumpControls();
+  };
+
+  const zoomTo100Percent = () => {
+    const img = imgRef.current;
+    const container = containerRef.current;
+    if (!img || !container || !naturalDimsRef.current) return;
+    const renderedW = img.offsetWidth;
+    if (renderedW > 0) {
+      const scale100 = naturalDimsRef.current.w / renderedW;
+      setZoom(Math.max(1, scale100));
+    }
+  };
+
+  // Reset zoom/pan/rotation when navigating to a different photo
   useEffect(() => {
     let cancelled = false;
     setSrc(null);
     setIsOriginal(false);
-    setBoxSize(null);
+    setRotation(0);
     naturalDimsRef.current = null;
     scaleRef.current = 1;
     posRef.current = { x: 0, y: 0 };
@@ -185,31 +205,7 @@ function ProgressiveImage({ fileId, fullUrl, quality, alt, fullscreen }: { fileI
     return () => { cancelled = true; };
   }, [fileId]);
 
-  // Fullscreen toggles change how much space the container actually has --
-  // re-lock the box at the new size (same aspect ratio, already known) so
-  // going fullscreen doesn't leave the photo pinned at its old windowed size.
-  useEffect(() => {
-    if (naturalDimsRef.current) lockBoxSize(naturalDimsRef.current.w, naturalDimsRef.current.h);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fullscreen]);
-
-  // Preloads and swaps in the previewUrl the parent currently has --
-  // fires on first load AND again later if the parent's background poll
-  // upgrades a thumbnail-tier previewUrl to the previewKey tier once the
-  // backfill/preview worker catches up (see FilePreviewModal). Deliberately
-  // separate from the identity-reset effect above and touches no zoom/pan
-  // state -- a background quality upgrade shouldn't reset anything the user
-  // is mid-gesture on.
-  //
-  // Once THAT lands, chases a third and final stage: the real, unprocessed
-  // original file. previewKey (2000px, WebP q85) is a genuine lossy
-  // re-encode -- visibly softer under zoom and, before the color-profile fix
-  // in previewWorker.ts, could shift colors -- so it's still a stand-in, not
-  // the real thing. Unlike thumbnail/preview generation, the original needs
-  // no async worker or polling: it's already sitting in storage, so this
-  // just downloads+decodes it directly and swaps it in once ready. Skipped
-  // entirely when the server already reported quality 'original' (no
-  // processed derivative exists at all, so fullUrl already *is* the file).
+  // Preload and swap previewUrl -> originalUrl
   useEffect(() => {
     let cancelled = false;
     const img = new Image();
@@ -224,7 +220,12 @@ function ProgressiveImage({ fileId, fullUrl, quality, alt, fullscreen }: { fileI
         .then((data) => {
           if (cancelled) return;
           const orig = new Image();
-          orig.onload = () => { if (!cancelled) { setSrc(data.originalUrl); setIsOriginal(true); } };
+          orig.onload = () => {
+            if (!cancelled) {
+              setSrc(data.originalUrl);
+              setIsOriginal(true);
+            }
+          };
           orig.src = data.originalUrl;
         })
         .catch(() => {});
@@ -234,11 +235,26 @@ function ProgressiveImage({ fileId, fullUrl, quality, alt, fullscreen }: { fileI
     return () => { cancelled = true; };
   }, [fullUrl, fileId, quality]);
 
-  useEffect(() => { applyTransform(false); }, [src]);
+  useEffect(() => { applyTransform(false); }, [src, rotation]);
 
+  // Smooth wheel zoom centered on cursor
   const handleWheel = (e: WheelEvent) => {
     e.preventDefault();
-    setZoom(scaleRef.current - e.deltaY * 0.0035, false);
+    const container = containerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left - rect.width / 2;
+    const mouseY = e.clientY - rect.top - rect.height / 2;
+    const delta = -e.deltaY * 0.003;
+    const curScale = scaleRef.current;
+    const nextScale = clamp(curScale * (1 + delta), MIN_SCALE, MAX_SCALE);
+    if (nextScale === curScale) return;
+    const ratio = nextScale / curScale;
+    posRef.current = {
+      x: mouseX - (mouseX - posRef.current.x) * ratio,
+      y: mouseY - (mouseY - posRef.current.y) * ratio,
+    };
+    setZoom(nextScale, false);
   };
 
   const handleDoubleClick = (e: MouseEvent) => {
@@ -248,7 +264,6 @@ function ProgressiveImage({ fileId, fullUrl, quality, alt, fullscreen }: { fileI
     }
     const rect = containerRef.current?.getBoundingClientRect();
     if (rect) {
-      // Zoom in centered on the click point.
       posRef.current = {
         x: -(e.clientX - rect.left - rect.width / 2) * (DOUBLE_TAP_SCALE - 1),
         y: -(e.clientY - rect.top - rect.height / 2) * (DOUBLE_TAP_SCALE - 1),
@@ -260,14 +275,16 @@ function ProgressiveImage({ fileId, fullUrl, quality, alt, fullscreen }: { fileI
   const handlePointerDown = (e: ReactPointerEvent) => {
     (e.target as Element).setPointerCapture(e.pointerId);
     pointers.current.set(e.pointerId, e.nativeEvent);
+    dragDistance.current = 0;
+
     if (pointers.current.size === 2) {
       const [a, b] = Array.from(pointers.current.values());
       pinchStartDist.current = dist(a, b);
       pinchStartScale.current = scaleRef.current;
       dragStart.current = null;
-    } else if (pointers.current.size === 1 && scaleRef.current > 1) {
+    } else if (pointers.current.size === 1) {
       dragStart.current = { x: e.clientX, y: e.clientY, px: posRef.current.x, py: posRef.current.y };
-      if (imgRef.current) imgRef.current.style.cursor = 'grabbing';
+      if (imgRef.current && scaleRef.current > 1) imgRef.current.style.cursor = 'grabbing';
     }
   };
 
@@ -280,19 +297,39 @@ function ProgressiveImage({ fileId, fullUrl, quality, alt, fullscreen }: { fileI
       const factor = dist(a, b) / pinchStartDist.current;
       setZoom(pinchStartScale.current * factor, false);
     } else if (pointers.current.size === 1 && dragStart.current) {
-      posRef.current = {
-        x: dragStart.current.px + (e.clientX - dragStart.current.x),
-        y: dragStart.current.py + (e.clientY - dragStart.current.y),
-      };
-      clampPos(scaleRef.current);
-      applyTransform(false);
+      const dx = e.clientX - dragStart.current.x;
+      const dy = e.clientY - dragStart.current.y;
+      dragDistance.current = Math.hypot(dx, dy);
+
+      if (scaleRef.current > 1) {
+        posRef.current = {
+          x: dragStart.current.px + dx,
+          y: dragStart.current.py + dy,
+        };
+        clampPos(scaleRef.current);
+        applyTransform(false);
+      }
     }
   };
 
   const endPointer = (e: ReactPointerEvent) => {
     pointers.current.delete(e.pointerId);
     if (pointers.current.size < 2) pinchStartDist.current = null;
+
     if (pointers.current.size === 0) {
+      // Check for swipe navigation or tap
+      if (dragStart.current) {
+        const dx = e.clientX - dragStart.current.x;
+        // Horizontal swipe to navigate when not zoomed
+        if (scaleRef.current <= 1 && Math.abs(dx) > 60 && Math.abs(e.clientY - dragStart.current.y) < 80) {
+          if (dx < 0 && onNext) onNext();
+          else if (dx > 0 && onPrev) onPrev();
+        } else if (dragDistance.current < 5) {
+          // Clean tap without drag -> toggle UI chrome (like iOS Photos & Google Photos)
+          onToggleChrome();
+        }
+      }
+
       dragStart.current = null;
       if (scaleRef.current <= MIN_SCALE) posRef.current = { x: 0, y: 0 };
       applyTransform(true);
@@ -320,66 +357,130 @@ function ProgressiveImage({ fileId, fullUrl, quality, alt, fullscreen }: { fileI
         src={src}
         alt={alt}
         draggable={false}
+        decoding="async"
         onLoad={(e) => {
-          // Guard, not a dependency check -- only the very first tier to
-          // actually finish loading for this photo gets to set the box.
-          if (!boxSize) {
-            const el = e.currentTarget;
-            lockBoxSize(el.naturalWidth, el.naturalHeight);
-          }
+          const el = e.currentTarget;
+          naturalDimsRef.current = { w: el.naturalWidth, h: el.naturalHeight };
         }}
-        className="object-contain rounded-lg"
-        style={
-          boxSize
-            ? { width: boxSize.w, height: boxSize.h }
-            : { maxWidth: '100%', maxHeight: fullscreen ? '100vh' : 'calc(85vh - 120px)' }
-        }
+        className="max-w-full max-h-full object-contain rounded-lg will-change-transform"
       />
 
-      {/* Shown while the modal is still displaying the 400px grid thumbnail
-          because the real preview hasn't finished generating yet (a fresh
-          upload or a large backfill can lag a few seconds to minutes behind
-          real-time viewing) -- FilePreviewModal polls in the background and
-          this disappears on its own the moment the upgrade lands. */}
+      {/* Low quality indicator while still on thumbnail tier */}
       {!isOriginal && (
-        <div className="absolute top-3 right-3 flex items-center gap-1.5 bg-black/50 backdrop-blur-sm rounded-full px-2.5 py-1 text-xs text-white/80">
+        <div className="absolute top-4 right-4 flex items-center gap-1.5 bg-black/60 backdrop-blur-md rounded-full px-3 py-1.5 text-xs text-white/90 shadow-md">
           <LoadingSpinner size="sm" className="border-white/30 border-t-white" />
-          Low quality
+          <span>Enhancing quality…</span>
         </div>
       )}
 
-      {/* Zoom controls -- the click-driven alternative to pinch/scroll, and
-          the visible affordance that zooming is even possible here. Fades
-          out after a second of zoom inactivity, held open while hovered. */}
+      {/* Floating Zoom & Tool Controls Bar */}
       <div
         onMouseEnter={bumpControls}
-        className={`absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-1 bg-black/50 backdrop-blur-sm rounded-full px-1.5 py-1 transition-opacity duration-300 ${controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+        className={clsx(
+          'absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-1 bg-black/65 backdrop-blur-md rounded-full px-2.5 py-1.5 shadow-2xl border border-white/10 transition-all duration-300 z-30',
+          controlsVisible || chromeVisible ? 'opacity-100 scale-100' : 'opacity-0 scale-95 pointer-events-none'
+        )}
       >
         <button
           onClick={(e) => { e.stopPropagation(); setZoom(scaleRef.current - 0.75); }}
           disabled={scale <= MIN_SCALE}
-          className="p-1.5 rounded-full text-white/80 hover:text-white hover:bg-white/10 disabled:opacity-30"
+          title="Zoom out"
+          className="p-1.5 rounded-full text-white/80 hover:text-white hover:bg-white/15 disabled:opacity-30 transition-colors"
         >
           <ZoomOut className="w-4 h-4" />
         </button>
-        <span className="text-white/70 text-xs w-10 text-center tabular-nums">{Math.round(scale * 100)}%</span>
+
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            if (scale > 1) setZoom(1);
+            else zoomTo100Percent();
+          }}
+          title="Click to toggle Fit / 100%"
+          className="px-2 py-1 rounded-full text-white/90 hover:text-white hover:bg-white/10 text-xs tabular-nums font-medium transition-colors"
+        >
+          {Math.round(scale * 100)}%
+        </button>
+
         <button
           onClick={(e) => { e.stopPropagation(); setZoom(scaleRef.current + 0.75); }}
           disabled={scale >= MAX_SCALE}
-          className="p-1.5 rounded-full text-white/80 hover:text-white hover:bg-white/10 disabled:opacity-30"
+          title="Zoom in"
+          className="p-1.5 rounded-full text-white/80 hover:text-white hover:bg-white/15 disabled:opacity-30 transition-colors"
         >
           <ZoomIn className="w-4 h-4" />
+        </button>
+
+        <div className="w-px h-4 bg-white/20 mx-1" />
+
+        <button
+          onClick={(e) => { e.stopPropagation(); setZoom(1); }}
+          title="Fit to screen"
+          className={clsx(
+            'px-2 py-1 rounded-full text-xs font-medium transition-colors',
+            scale === 1 ? 'bg-white/20 text-white' : 'text-white/70 hover:text-white hover:bg-white/10'
+          )}
+        >
+          Fit
+        </button>
+
+        <button
+          onClick={(e) => { e.stopPropagation(); zoomTo100Percent(); }}
+          title="100% (1:1 actual pixels)"
+          className="px-2 py-1 rounded-full text-xs font-medium text-white/70 hover:text-white hover:bg-white/10 transition-colors"
+        >
+          100%
+        </button>
+
+        <div className="w-px h-4 bg-white/20 mx-1" />
+
+        <button
+          onClick={(e) => { e.stopPropagation(); rotateImage(); }}
+          title="Rotate 90°"
+          className="p-1.5 rounded-full text-white/80 hover:text-white hover:bg-white/15 transition-colors"
+        >
+          <RotateCw className="w-4 h-4" />
         </button>
       </div>
     </div>
   );
 }
 
-function PreviewContent({ file, previewUrl, quality, fullscreen }: { file: DriveFile; previewUrl: string; quality: 'thumbnail' | 'preview' | 'original' | null; fullscreen: boolean }) {
+function PreviewContent({
+  file,
+  previewUrl,
+  quality,
+  fullscreen,
+  chromeVisible,
+  onToggleChrome,
+  onNext,
+  onPrev,
+}: {
+  file: DriveFile;
+  previewUrl: string;
+  quality: 'thumbnail' | 'preview' | 'original' | null;
+  fullscreen: boolean;
+  chromeVisible: boolean;
+  onToggleChrome: () => void;
+  onNext?: () => void;
+  onPrev?: () => void;
+}) {
   const { mimeType } = file;
 
   if (mimeType.startsWith('image/')) {
-    return <ProgressiveImage fileId={file.id} fullUrl={previewUrl} quality={quality} alt={file.name} fullscreen={fullscreen} />;
+    return (
+      <ProgressiveImage
+        fileId={file.id}
+        fullUrl={previewUrl}
+        quality={quality}
+        alt={file.name}
+        fullscreen={fullscreen}
+        chromeVisible={chromeVisible}
+        onToggleChrome={onToggleChrome}
+        onNext={onNext}
+        onPrev={onPrev}
+      />
+    );
   }
 
   if (mimeType.startsWith('video/')) {
@@ -391,13 +492,13 @@ function PreviewContent({ file, previewUrl, quality, fullscreen }: { file: Drive
       <div className="flex flex-col items-center gap-6 py-8">
         <div className="w-32 h-32 rounded-2xl bg-brand-100 flex items-center justify-center">
           <svg className="w-16 h-16 text-brand-500" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/>
+            <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" />
           </svg>
         </div>
         <audio src={previewUrl} controls className="w-full max-w-md">
           Your browser does not support audio playback.
         </audio>
-        <p className="text-sm text-slate-500">{file.name}</p>
+        <p className="text-sm text-slate-300">{file.name}</p>
       </div>
     );
   }
@@ -406,25 +507,19 @@ function PreviewContent({ file, previewUrl, quality, fullscreen }: { file: Drive
     return (
       <iframe
         src={previewUrl}
-        className="w-full rounded-lg border-0"
-        style={{ height: 'calc(85vh - 120px)', minHeight: '400px' }}
+        className="w-full h-full rounded-lg border-0 bg-slate-900"
         title={file.name}
       />
     );
   }
 
-  // Browsers report .jsonl/.ndjson (newline-delimited JSON, otherwise plain
-  // text) as application/octet-stream since they don't recognize the
-  // extension -- special-cased here rather than relying on mimeType alone.
   const isJsonLines = /\.(jsonl|ndjson)$/i.test(file.name);
-
   if (mimeType.startsWith('text/') || mimeType.includes('json') || mimeType.includes('xml') || isJsonLines) {
     return (
-      <div className="w-full max-h-[calc(85vh-120px)] overflow-auto rounded-lg bg-white">
+      <div className="w-full h-full max-w-5xl overflow-auto rounded-lg bg-white">
         <iframe
           src={previewUrl}
-          className="w-full border-0 min-h-[400px] bg-white"
-          style={{ height: 'calc(85vh - 120px)' }}
+          className="w-full h-full min-h-[400px] border-0 bg-white"
           title={file.name}
           sandbox="allow-same-origin"
         />
@@ -438,39 +533,121 @@ function PreviewContent({ file, previewUrl, quality, fullscreen }: { file: Drive
 function NoPreviewAvailable() {
   return (
     <div className="flex flex-col items-center gap-4 py-12 text-center">
-      <div className="w-20 h-20 rounded-2xl bg-slate-100 flex items-center justify-center">
+      <div className="w-20 h-20 rounded-2xl bg-slate-800 flex items-center justify-center">
         <ExternalLink className="w-10 h-10 text-slate-400" />
       </div>
       <div>
-        <p className="text-base font-medium text-slate-700">Preview not available</p>
-        <p className="text-sm text-slate-500 mt-1">Download the file to view it</p>
+        <p className="text-base font-medium text-slate-200">Preview not available</p>
+        <p className="text-sm text-slate-400 mt-1">Download the file to view it</p>
       </div>
     </div>
   );
 }
 
+// Bottom Filmstrip Thumbnail item
+function FilmstripItem({
+  file,
+  isActive,
+  onClick,
+}: {
+  file: DriveFile;
+  isActive: boolean;
+  onClick: () => void;
+}) {
+  const [thumbSrc, setThumbSrc] = useState<string | null>(null);
+  const itemRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getFileThumbnailUrl(file.id)
+      .then((d) => { if (!cancelled) setThumbSrc(d.thumbnailUrl); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [file.id]);
+
+  useEffect(() => {
+    if (isActive && itemRef.current) {
+      itemRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+    }
+  }, [isActive]);
+
+  return (
+    <button
+      ref={itemRef}
+      onClick={onClick}
+      className={clsx(
+        'relative w-14 h-14 rounded-lg overflow-hidden shrink-0 transition-all duration-200 bg-slate-800 focus:outline-none',
+        isActive
+          ? 'ring-2 ring-brand-500 scale-105 shadow-lg opacity-100'
+          : 'opacity-60 hover:opacity-100 hover:scale-100'
+      )}
+    >
+      {thumbSrc ? (
+        <img
+          src={thumbSrc}
+          alt={file.name}
+          className="w-full h-full object-cover"
+          loading="lazy"
+          decoding="async"
+        />
+      ) : (
+        <div className="w-full h-full flex items-center justify-center text-slate-400 text-[10px] p-1 truncate">
+          {file.name}
+        </div>
+      )}
+    </button>
+  );
+}
+
 const ONE_MB = 1024 * 1024;
 
-export function FilePreviewModal({ file, onClose, onNext, onPrev, hasNext, hasPrev }: Props) {
+export function FilePreviewModal({
+  file,
+  files,
+  onClose,
+  onNext,
+  onPrev,
+  hasNext,
+  hasPrev,
+  onSelectFile,
+}: Props) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewQuality, setPreviewQuality] = useState<'thumbnail' | 'preview' | 'original' | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
+  const [showFilmstrip, setShowFilmstrip] = useState(true);
+  const [chromeVisible, setChromeVisible] = useState(true);
   const [rawMode, setRawMode] = useState(false);
   const [rawContent, setRawContent] = useState<string | null>(null);
   const [rawLoading, setRawLoading] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const modalRef = useRef<HTMLDivElement>(null);
 
-  // Fetches the preview URL, and -- if the backend says it's still only the
-  // 400px thumbnail stand-in (previewKey not generated yet) -- keeps quietly
-  // re-checking every few seconds so a slow backfill/upload that finishes
-  // AFTER the modal opened still upgrades on screen instead of staying stuck.
+  // Compute navigation and media list if files array is supplied
+  const mediaFiles = files?.filter((f) => f.mimeType.startsWith('image/') || f.mimeType.startsWith('video/')) ?? [];
+  const currentIndex = file && files ? files.findIndex((f) => f.id === file.id) : -1;
+  const effectiveHasNext = hasNext ?? (currentIndex >= 0 && currentIndex < (files?.length ?? 0) - 1);
+  const effectiveHasPrev = hasPrev ?? (currentIndex > 0);
+
+  const effectiveOnNext = () => {
+    if (onNext) onNext();
+    else if (files && currentIndex >= 0 && currentIndex < files.length - 1) {
+      onSelectFile?.(files[currentIndex + 1]);
+    }
+  };
+
+  const effectiveOnPrev = () => {
+    if (onPrev) onPrev();
+    else if (files && currentIndex > 0) {
+      onSelectFile?.(files[currentIndex - 1]);
+    }
+  };
+
   useEffect(() => {
     if (!file) return;
     let cancelled = false;
     let pollTimer: ReturnType<typeof setTimeout> | null = null;
-    let pollsLeft = 20; // ~60s of retrying at 3s apart -- generous for a large backfill queue
+    let pollsLeft = 20;
 
     setIsLoading(true);
     setPreviewUrl(null);
@@ -500,14 +677,6 @@ export function FilePreviewModal({ file, onClose, onNext, onPrev, hasNext, hasPr
     };
   }, [file?.id]);
 
-  // True browser Fullscreen API where it exists (hides tab/URL chrome too,
-  // not just CSS) -- but iOS Safari has NO Fullscreen API for ordinary
-  // elements at all (`Element.prototype.requestFullscreen` is simply
-  // undefined there, video-only), so calling it optional-chained silently
-  // no-ops and the button looks broken. Fall back to a CSS-only "maximized"
-  // mode (isFullscreen state alone already drives the bigger image/hidden
-  // chrome) whenever the real API is missing or its request gets rejected --
-  // that's the best any web page can do on iOS, but it beats doing nothing.
   const toggleFullscreen = () => {
     if (isFullscreen) {
       if (document.fullscreenElement) {
@@ -521,23 +690,18 @@ export function FilePreviewModal({ file, onClose, onNext, onPrev, hasNext, hasPr
     if (el?.requestFullscreen) {
       el.requestFullscreen()
         .then(() => setIsFullscreen(true))
-        .catch(() => setIsFullscreen(true)); // rejected (e.g. Permissions-Policy) -- still give the CSS fallback
+        .catch(() => setIsFullscreen(true));
     } else {
-      setIsFullscreen(true); // no Fullscreen API at all (iOS Safari)
+      setIsFullscreen(true);
     }
   };
 
   useEffect(() => {
-    // Only reconcile FROM a real fullscreen transition (native exit via the
-    // browser's own UI/Escape) -- don't let this fire-and-clobber the CSS
-    // fallback path above, which never touches document.fullscreenElement.
     const handler = () => { if (document.fullscreenElement === null) setIsFullscreen(false); };
     document.addEventListener('fullscreenchange', handler);
     return () => document.removeEventListener('fullscreenchange', handler);
   }, []);
 
-  // Fullscreen is per-photo browsing-session state, not per-file -- exit it
-  // when the modal itself closes so a later unrelated open doesn't inherit it.
   useEffect(() => {
     if (!file) {
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
@@ -572,18 +736,36 @@ export function FilePreviewModal({ file, onClose, onNext, onPrev, hasNext, hasPr
     }
   };
 
+  // Keyboard navigation
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowRight' && hasNext) onNext?.();
-      if (e.key === 'ArrowLeft' && hasPrev) onPrev?.();
-      if (e.key === 'Escape' && !document.fullscreenElement) onClose();
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
+      if ((e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') && effectiveHasNext) {
+        effectiveOnNext();
+      } else if ((e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') && effectiveHasPrev) {
+        effectiveOnPrev();
+      } else if (e.key === 'Escape') {
+        if (document.fullscreenElement) {
+          document.exitFullscreen().catch(() => {});
+        } else {
+          onClose();
+        }
+      } else if (e.key === 'f' || e.key === 'F') {
+        toggleFullscreen();
+      } else if (e.key === 'i' || e.key === 'I') {
+        setShowInfo((s) => !s);
+      } else if (e.key === ' ' || e.key === 'h' || e.key === 'H') {
+        setChromeVisible((v) => !v);
+      }
     };
     document.addEventListener('keydown', handleKey);
     return () => document.removeEventListener('keydown', handleKey);
-  }, [hasNext, hasPrev, onNext, onPrev, onClose]);
+  }, [effectiveHasNext, effectiveHasPrev, effectiveOnNext, effectiveOnPrev, onClose, isFullscreen]);
 
   const fileSize = file ? (typeof file.size === 'string' ? parseInt(file.size) : file.size) : 0;
   const canRaw = !!file && fileSize < ONE_MB && !!previewUrl;
+  const isImage = file?.mimeType.startsWith('image/');
 
   return (
     <Transition appear show={!!file} as={Fragment}>
@@ -597,135 +779,222 @@ export function FilePreviewModal({ file, onClose, onNext, onPrev, hasNext, hasPr
           leaveFrom="opacity-100"
           leaveTo="opacity-0"
         >
-          <div className="fixed inset-0 bg-black/80 backdrop-blur-md" />
+          <div className="fixed inset-0 bg-black/90 backdrop-blur-md" />
         </Transition.Child>
 
-        <div ref={modalRef} className="fixed inset-0 flex flex-col bg-black">
-          {/* Header */}
-          <div className="flex items-center justify-between px-4 py-3 bg-black/40">
+        <div ref={modalRef} className="fixed inset-0 flex flex-col bg-black overflow-hidden select-none">
+          {/* Header Bar — Fades out when chrome is toggled off */}
+          <div
+            className={clsx(
+              'absolute top-0 left-0 right-0 z-40 flex items-center justify-between px-4 py-3 bg-gradient-to-b from-black/80 via-black/40 to-transparent transition-all duration-300',
+              chromeVisible ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-full pointer-events-none'
+            )}
+          >
             <div className="flex items-center gap-3 min-w-0">
-              <button onClick={onClose} className="p-1.5 rounded-lg text-white/70 hover:text-white hover:bg-white/10 flex-shrink-0">
+              <button
+                onClick={onClose}
+                className="p-2 rounded-xl text-white/80 hover:text-white hover:bg-white/15 flex-shrink-0 transition-colors"
+                title="Close (Esc)"
+              >
                 <X className="w-5 h-5" />
               </button>
-              <span className="text-white font-medium truncate text-sm">{file?.name}</span>
+              <div className="min-w-0">
+                <span className="text-white font-medium truncate text-sm block">{file?.name}</span>
+                {files && files.length > 1 && (
+                  <span className="text-white/50 text-xs">
+                    {currentIndex + 1} of {files.length}
+                  </span>
+                )}
+              </div>
             </div>
-            <div className="flex items-center gap-2">
+
+            <div className="flex items-center gap-1.5">
               {canRaw && (
                 <button
                   onClick={handleToggleRaw}
                   disabled={rawLoading}
                   className={clsx(
-                    'px-3 py-1.5 text-sm rounded-lg transition-colors font-mono',
-                    rawMode
-                      ? 'bg-white/20 text-white'
-                      : 'text-white/70 hover:text-white hover:bg-white/10'
+                    'px-3 py-1.5 text-xs rounded-lg transition-colors font-mono',
+                    rawMode ? 'bg-white/20 text-white' : 'text-white/70 hover:text-white hover:bg-white/10'
                   )}
                 >
                   {rawLoading ? '…' : rawMode ? 'Normal' : 'Raw'}
                 </button>
               )}
-              {file?.mimeType.startsWith('image/') && (
+
+              {/* Filmstrip toggle button */}
+              {mediaFiles.length > 1 && (
                 <button
-                  onClick={toggleFullscreen}
-                  title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-                  className="p-1.5 rounded-lg text-white/70 hover:text-white hover:bg-white/10"
+                  onClick={() => setShowFilmstrip((s) => !s)}
+                  title={showFilmstrip ? 'Hide filmstrip' : 'Show filmstrip'}
+                  className={clsx(
+                    'p-2 rounded-xl transition-colors',
+                    showFilmstrip ? 'bg-white/20 text-white' : 'text-white/70 hover:text-white hover:bg-white/10'
+                  )}
                 >
-                  {isFullscreen ? <Minimize2 className="w-5 h-5" /> : <Maximize2 className="w-5 h-5" />}
+                  <Images className="w-5 h-5" />
                 </button>
               )}
+
+              {/* Fullscreen button */}
+              <button
+                onClick={toggleFullscreen}
+                title={isFullscreen ? 'Exit fullscreen (F)' : 'Fullscreen (F)'}
+                className="p-2 rounded-xl text-white/70 hover:text-white hover:bg-white/10 transition-colors"
+              >
+                {isFullscreen ? <Minimize2 className="w-5 h-5" /> : <Maximize2 className="w-5 h-5" />}
+              </button>
+
+              {/* Info button */}
               <button
                 onClick={() => setShowInfo((s) => !s)}
-                className={clsx('p-1.5 rounded-lg text-white/70 hover:text-white hover:bg-white/10', showInfo && 'bg-white/10 text-white')}
+                title="File information (I)"
+                className={clsx(
+                  'p-2 rounded-xl transition-colors',
+                  showInfo ? 'bg-white/20 text-white' : 'text-white/70 hover:text-white hover:bg-white/10'
+                )}
               >
                 <Info className="w-5 h-5" />
               </button>
+
+              {/* Download button */}
               <button
                 onClick={handleDownload}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white text-sm rounded-lg transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-white/15 hover:bg-white/25 text-white text-xs font-medium rounded-xl transition-colors shadow-sm ml-1"
+                title="Download file"
               >
                 <Download className="w-4 h-4" />
-                Download
+                <span>Download</span>
               </button>
             </div>
           </div>
 
-          {/* Content area */}
-          <div className={clsx('flex-1 flex items-center justify-center overflow-hidden', isFullscreen ? 'gap-0 px-0' : 'gap-4 px-4')}>
-            {/* Prev button */}
+          {/* Minimal Corner Control to reveal chrome when hidden */}
+          {!chromeVisible && (
             <button
-              onClick={onPrev}
-              disabled={!hasPrev}
-              className="flex-shrink-0 w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center disabled:opacity-30 transition-all"
+              onClick={() => setChromeVisible(true)}
+              className="absolute top-4 right-4 z-40 p-2 rounded-full bg-black/50 hover:bg-black/80 backdrop-blur-md text-white/70 hover:text-white transition-all shadow-lg"
+              title="Show controls (Space)"
             >
-              <ChevronLeft className="w-5 h-5" />
+              <Maximize className="w-4 h-4" />
             </button>
+          )}
 
-            {/* Preview */}
-            <div className={clsx('flex-1 flex items-center justify-center min-w-0', !isFullscreen && 'max-w-5xl')}>
-              {isLoading ? (
-                <LoadingSpinner size="xl" className="border-white/30 border-t-white" />
-              ) : rawMode && rawContent !== null ? (
-                <div
-                  className="w-full overflow-auto rounded-lg bg-slate-900 p-4"
-                  style={{ maxHeight: 'calc(85vh - 120px)' }}
-                >
-                  <pre className="text-xs text-slate-300 font-mono whitespace-pre-wrap break-all">
-                    {rawContent}
-                  </pre>
-                </div>
-              ) : previewUrl && file ? (
-                <PreviewContent file={file} previewUrl={previewUrl} quality={previewQuality} fullscreen={isFullscreen} />
-              ) : (
-                // getFilePreviewUrl failed, or the file has no preview URL for
-                // some other reason -- show the same fallback PreviewContent
-                // uses instead of rendering nothing, which reads as a stuck
-                // modal (this is what the infinite-spinner reports were
-                // actually hitting: isLoading correctly resolves to false,
-                // but a blank void looks the same as "still working" to a
-                // user watching the modal).
-                <NoPreviewAvailable />
+          {/* Floating Prev Button Overlay */}
+          {effectiveHasPrev && (
+            <button
+              onClick={(e) => { e.stopPropagation(); effectiveOnPrev(); }}
+              className={clsx(
+                'absolute left-4 top-1/2 -translate-y-1/2 z-30 w-12 h-12 rounded-full bg-black/45 hover:bg-black/75 backdrop-blur-md text-white/90 hover:text-white flex items-center justify-center transition-all shadow-xl hover:scale-105 border border-white/10',
+                chromeVisible ? 'opacity-100' : 'opacity-0 pointer-events-none hover:opacity-100'
               )}
-            </div>
-
-            {/* Next button */}
-            <button
-              onClick={onNext}
-              disabled={!hasNext}
-              className="flex-shrink-0 w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center disabled:opacity-30 transition-all"
+              title="Previous photo (← or A)"
             >
-              <ChevronRight className="w-5 h-5" />
+              <ChevronLeft className="w-6 h-6" />
             </button>
+          )}
+
+          {/* Floating Next Button Overlay */}
+          {effectiveHasNext && (
+            <button
+              onClick={(e) => { e.stopPropagation(); effectiveOnNext(); }}
+              className={clsx(
+                'absolute right-4 top-1/2 -translate-y-1/2 z-30 w-12 h-12 rounded-full bg-black/45 hover:bg-black/75 backdrop-blur-md text-white/90 hover:text-white flex items-center justify-center transition-all shadow-xl hover:scale-105 border border-white/10',
+                chromeVisible ? 'opacity-100' : 'opacity-0 pointer-events-none hover:opacity-100'
+              )}
+              title="Next photo (→ or D)"
+            >
+              <ChevronRight className="w-6 h-6" />
+            </button>
+          )}
+
+          {/* Main Photo / Preview Canvas */}
+          <div className="flex-1 w-full h-full relative flex items-center justify-center overflow-hidden">
+            {isLoading ? (
+              <LoadingSpinner size="xl" className="border-white/30 border-t-white" />
+            ) : rawMode && rawContent !== null ? (
+              <div className="w-full max-w-5xl h-full p-6 overflow-auto">
+                <pre className="text-xs text-slate-300 font-mono whitespace-pre-wrap break-all bg-slate-900/90 p-4 rounded-xl">
+                  {rawContent}
+                </pre>
+              </div>
+            ) : previewUrl && file ? (
+              <PreviewContent
+                file={file}
+                previewUrl={previewUrl}
+                quality={previewQuality}
+                fullscreen={isFullscreen}
+                chromeVisible={chromeVisible}
+                onToggleChrome={() => setChromeVisible((v) => !v)}
+                onNext={effectiveHasNext ? effectiveOnNext : undefined}
+                onPrev={effectiveHasPrev ? effectiveOnPrev : undefined}
+              />
+            ) : (
+              <NoPreviewAvailable />
+            )}
           </div>
 
-          {/* Info panel */}
+          {/* Bottom Filmstrip Gallery Strip */}
+          {showFilmstrip && mediaFiles.length > 1 && (
+            <div
+              className={clsx(
+                'z-40 w-full bg-black/60 backdrop-blur-md border-t border-white/10 px-4 py-2 transition-all duration-300 flex items-center justify-center',
+                chromeVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-full pointer-events-none'
+              )}
+            >
+              <div className="flex items-center gap-2 overflow-x-auto max-w-4xl py-1 no-scrollbar scroll-smooth">
+                {mediaFiles.map((f) => (
+                  <FilmstripItem
+                    key={f.id}
+                    file={f}
+                    isActive={f.id === file?.id}
+                    onClick={() => onSelectFile?.(f)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* File Information Sidebar Panel */}
           {showInfo && file && (
-            <div className="absolute right-0 top-14 bottom-0 w-72 bg-black/60 backdrop-blur-md border-l border-white/10 p-4 overflow-y-auto text-white">
-              <h3 className="font-semibold mb-4 text-sm">File Information</h3>
-              <dl className="space-y-3 text-sm">
+            <div className="absolute right-0 top-14 bottom-0 w-80 bg-black/75 backdrop-blur-xl border-l border-white/10 p-6 overflow-y-auto text-white z-50 shadow-2xl">
+              <div className="flex items-center justify-between mb-6 pb-3 border-b border-white/10">
+                <h3 className="font-semibold text-sm text-white">File Information</h3>
+                <button
+                  onClick={() => setShowInfo(false)}
+                  className="p-1 rounded-lg text-white/50 hover:text-white hover:bg-white/10 transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <dl className="space-y-4 text-sm">
                 <div>
                   <dt className="text-white/50 text-xs uppercase tracking-wider mb-1">Name</dt>
-                  <dd className="break-all">{file.name}</dd>
+                  <dd className="break-all font-medium text-white/95">{file.name}</dd>
                 </div>
                 <div>
                   <dt className="text-white/50 text-xs uppercase tracking-wider mb-1">Type</dt>
-                  <dd className="text-white/80">{file.mimeType}</dd>
+                  <dd className="text-white/85 font-mono text-xs">{file.mimeType}</dd>
                 </div>
                 <div>
                   <dt className="text-white/50 text-xs uppercase tracking-wider mb-1">Size</dt>
-                  <dd className="text-white/80">{formatBytes(file.size)}</dd>
+                  <dd className="text-white/85">{formatBytes(file.size)}</dd>
                 </div>
                 <div>
                   <dt className="text-white/50 text-xs uppercase tracking-wider mb-1">Modified</dt>
-                  <dd className="text-white/80">{formatDistanceToNow(new Date(file.updatedAt), { addSuffix: true })}</dd>
+                  <dd className="text-white/85">
+                    {formatDistanceToNow(new Date(file.updatedAt), { addSuffix: true })}
+                  </dd>
                 </div>
                 <div>
                   <dt className="text-white/50 text-xs uppercase tracking-wider mb-1">Downloads</dt>
-                  <dd className="text-white/80">{file.downloadCount}</dd>
+                  <dd className="text-white/85">{file.downloadCount}</dd>
                 </div>
                 {file.description && (
                   <div>
                     <dt className="text-white/50 text-xs uppercase tracking-wider mb-1">Description</dt>
-                    <dd className="text-white/80">{file.description}</dd>
+                    <dd className="text-white/85 leading-relaxed">{file.description}</dd>
                   </div>
                 )}
               </dl>

@@ -682,7 +682,9 @@ export function MyDrivePage() {
       {previewFile && (
         <FilePreviewModal
           file={previewFile}
+          files={files}
           onClose={() => setPreviewFile(null)}
+          onSelectFile={setPreviewFile}
         />
       )}
 

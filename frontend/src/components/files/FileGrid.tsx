@@ -13,31 +13,54 @@ import { getFileThumbnailUrl } from '../../hooks/useFiles';
 // renders anything and never even issues a request the browser recognizes as
 // an image fetch. Resolve the actual signed URL first, same as the preview
 // modal already does, then render that.
+import { memo } from 'react';
+
+// Singleton IntersectionObserver for all thumbnails.
+// Replaces thousands of per-thumbnail observer instances with a single observer,
+// eliminating massive scroll-time layout recalculations and observer churn.
+let sharedThumbnailObserver: IntersectionObserver | null = null;
+const thumbnailCallbacks = new Map<Element, () => void>();
+
+function observeThumbnail(el: Element, callback: () => void) {
+  if (typeof window === 'undefined' || !('IntersectionObserver' in window)) {
+    callback();
+    return () => {};
+  }
+  if (!sharedThumbnailObserver) {
+    sharedThumbnailObserver = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            const cb = thumbnailCallbacks.get(entry.target);
+            if (cb) {
+              cb();
+              thumbnailCallbacks.delete(entry.target);
+            }
+            sharedThumbnailObserver?.unobserve(entry.target);
+          }
+        }
+      },
+      { rootMargin: '600px' }
+    );
+  }
+  thumbnailCallbacks.set(el, callback);
+  sharedThumbnailObserver.observe(el);
+  return () => {
+    thumbnailCallbacks.delete(el);
+    sharedThumbnailObserver?.unobserve(el);
+  };
+}
+
 function Thumbnail({ fileId, mimeType, alt }: { fileId: string; mimeType: string; alt: string }) {
   const [src, setSrc] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const [inView, setInView] = useState(false);
   const elRef = useRef<HTMLDivElement>(null);
 
-  // Gate the signed-URL fetch on actual (near-)visibility, not mount --
-  // opening a folder with hundreds/thousands of files otherwise fires that
-  // many API calls all at once regardless of what's on screen. Native
-  // `loading="lazy"` on the <img> below only defers the image *byte* fetch,
-  // not this call that resolves its src in the first place.
   useEffect(() => {
     const el = elRef.current;
     if (!el) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting) {
-          setInView(true);
-          observer.disconnect();
-        }
-      },
-      { rootMargin: '600px' } // start loading well before it actually scrolls into frame
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
+    return observeThumbnail(el, () => setInView(true));
   }, []);
 
   useEffect(() => {
@@ -52,15 +75,8 @@ function Thumbnail({ fileId, mimeType, alt }: { fileId: string; mimeType: string
   return (
     <div ref={elRef} className="w-full h-full">
       {failed || (!src && !inView) ? (
-        // Generic icon: permanent failure, or just not near the viewport yet
-        // (same look either way -- indistinguishable and that's fine, this
-        // state is normally never even seen since it clears the instant a
-        // tile scrolls close).
         <FileIcon mimeType={mimeType} className="w-14 h-14" size={28} />
       ) : !src ? (
-        // Actually in view and the request is in flight -- a real loading
-        // signal distinct from both the icon above and the finished photo,
-        // so it doesn't read as "broken" while waiting on a slow request.
         <div className="w-full h-full animate-pulse bg-slate-200" />
       ) : (
         <img
@@ -68,6 +84,7 @@ function Thumbnail({ fileId, mimeType, alt }: { fileId: string; mimeType: string
           alt={alt}
           className="w-full h-full object-cover"
           loading="lazy"
+          decoding="async"
           onError={() => setFailed(true)}
         />
       )}
@@ -114,7 +131,7 @@ function getDragData(e: React.DragEvent): DragDropPayload | null {
 }
 
 
-function FolderCard({
+const FolderCard = memo(function FolderCard({
   folder,
   onDoubleClick,
   onAction,
@@ -156,8 +173,12 @@ function FolderCard({
           e.preventDefault();
           setMenuPos({ x: e.clientX, y: e.clientY });
         }}
+        style={{
+          contentVisibility: 'auto',
+          containIntrinsicSize: '200px 140px',
+        }}
         className={clsx(
-          'group relative flex flex-col p-4 bg-white rounded-xl border cursor-pointer transition-all duration-150 select-none',
+          'group relative flex flex-col p-4 bg-white rounded-xl border cursor-pointer transition-[border-color,box-shadow,background-color] duration-150 select-none',
           dragOver
             ? 'border-brand-400 bg-brand-50 shadow-md ring-2 ring-brand-200'
             : isSelected
@@ -224,9 +245,9 @@ function FolderCard({
       )}
     </>
   );
-}
+});
 
-function FileCard({
+const FileCard = memo(function FileCard({
   file,
   onClick,
   onAction,
@@ -271,8 +292,12 @@ function FileCard({
           e.preventDefault();
           setMenuPos({ x: e.clientX, y: e.clientY });
         }}
+        style={{
+          contentVisibility: 'auto',
+          containIntrinsicSize: '200px 200px',
+        }}
         className={clsx(
-          'group relative flex flex-col bg-white rounded-xl border cursor-pointer transition-all duration-150 select-none overflow-hidden',
+          'group relative flex flex-col bg-white rounded-xl border cursor-pointer transition-[border-color,box-shadow,background-color] duration-150 select-none overflow-hidden',
           dragOver
             ? 'border-brand-400 bg-brand-50 shadow-md ring-2 ring-brand-200'
             : isSelected
@@ -308,7 +333,7 @@ function FileCard({
           <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
             <button
               onClick={(e) => { e.stopPropagation(); setMenuPos({ x: e.clientX, y: e.clientY }); }}
-              className="p-1.5 bg-white/90 backdrop-blur-sm rounded-lg shadow-sm text-slate-500 hover:text-slate-700"
+              className="p-1.5 bg-white/95 rounded-lg shadow-sm text-slate-500 hover:text-slate-700"
             >
               <MoreVertical className="w-3.5 h-3.5" />
             </button>
@@ -350,7 +375,7 @@ function FileCard({
       )}
     </>
   );
-}
+});
 
 export function FileGrid({ files, folders, onFileClick, onFolderClick, onFileAction, onFolderAction, isTrash, onDropOnFolder, onDropOnItem, selectedItems, onToggleSelect }: Props) {
   return (

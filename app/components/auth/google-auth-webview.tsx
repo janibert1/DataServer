@@ -4,6 +4,7 @@ import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import type { ShouldStartLoadRequest, WebViewNavigation, WebViewErrorEvent } from 'react-native-webview/lib/WebViewTypes';
 import { Ionicons } from '@expo/vector-icons';
+import * as Linking from 'expo-linking';
 import { useAuthStore } from '@/stores/auth-store';
 import { getMe } from '@/lib/api/auth';
 import Toast from 'react-native-toast-message';
@@ -58,6 +59,15 @@ export function GoogleAuthWebView({ visible, onClose }: GoogleAuthWebViewProps) 
       handled.current = false;
     }
   }, [visible]);
+
+  useEffect(() => {
+    const sub = Linking.addEventListener('url', (event) => {
+      if (isAuthCallbackUrl(event.url)) {
+        handleAuthCallback(event.url);
+      }
+    });
+    return () => sub.remove();
+  }, []);
 
   if (!serverUrl) return null;
 
@@ -141,6 +151,35 @@ export function GoogleAuthWebView({ visible, onClose }: GoogleAuthWebViewProps) 
     }
   }
 
+  function handleMessage(event: any) {
+    try {
+      const data = JSON.parse(event.nativeEvent.data);
+      if (data?.type === 'token' && data?.token) {
+        handleAuthCallback(`dataserver://auth-callback?token=${data.token}`);
+      }
+    } catch {}
+  }
+
+  const recoveryScript = `
+(function() {
+  if (window.location.pathname.startsWith('/drive')) {
+    fetch('/api/tokens', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Mobile App Session Recovery' })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d && d.token && window.ReactNativeWebView) {
+        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'token', token: d.token }));
+      }
+    })
+    .catch(function() {});
+  }
+})();
+true;
+`;
+
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="fullScreen">
       <SafeAreaProvider>
@@ -165,6 +204,8 @@ export function GoogleAuthWebView({ visible, onClose }: GoogleAuthWebViewProps) 
           // it still shares NSURLCache with a failed prior attempt and can
           // silently serve a stale cached page instead of re-requesting.
           cacheEnabled={false}
+          injectedJavaScript={recoveryScript}
+          onMessage={handleMessage}
           onShouldStartLoadWithRequest={handleShouldStartLoad}
           onNavigationStateChange={handleNavigationChange}
           onError={handleError}
