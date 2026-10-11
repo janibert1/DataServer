@@ -59,6 +59,11 @@ export function ZoomableImage({ fileId, fullUrl, quality, chromeVisible, onImage
   const translateY = useSharedValue(0);
   const savedTranslateX = useSharedValue(0);
   const savedTranslateY = useSharedValue(0);
+  // The pinch focal point is stored at activation. Keeping the image point
+  // beneath that point stable is what makes a pinch zoom into the place the
+  // user actually pinched rather than towards the middle of the screen.
+  const pinchStartFocalX = useSharedValue(0);
+  const pinchStartFocalY = useSharedValue(0);
   // Mirrors of boxSize/container dims, kept in shared values purely so the
   // pan-clamp math (also UI-thread) can read them without a bridge hop.
   const boxW = useSharedValue(0);
@@ -99,22 +104,30 @@ export function ZoomableImage({ fileId, fullUrl, quality, chromeVisible, onImage
     if (naturalDimsRef.current) lockBoxSize(naturalDimsRef.current.w, naturalDimsRef.current.h);
   }
 
-  function setZoom(next: number, animate = true) {
+  function setZoom(next: number, animate = true, focalX = 0, focalY = 0) {
     'worklet';
     const clamped = clamp(next, MIN_SCALE, MAX_SCALE);
+    const fromScale = Math.max(scale.value, MIN_SCALE);
+    const zoomRatio = clamped / fromScale;
+    const target = clamped === MIN_SCALE
+      ? { x: 0, y: 0 }
+      : clampTranslate(
+        clamped,
+        focalX - zoomRatio * (focalX - translateX.value),
+        focalY - zoomRatio * (focalY - translateY.value),
+      );
+
     savedScale.value = clamped;
     if (animate) scale.value = withTiming(clamped, { duration: 200 });
     else scale.value = clamped;
-    if (clamped === MIN_SCALE) {
-      savedTranslateX.value = 0;
-      savedTranslateY.value = 0;
-      if (animate) {
-        translateX.value = withTiming(0, { duration: 200 });
-        translateY.value = withTiming(0, { duration: 200 });
-      } else {
-        translateX.value = 0;
-        translateY.value = 0;
-      }
+    savedTranslateX.value = target.x;
+    savedTranslateY.value = target.y;
+    if (animate) {
+      translateX.value = withTiming(target.x, { duration: 200 });
+      translateY.value = withTiming(target.y, { duration: 200 });
+    } else {
+      translateX.value = target.x;
+      translateY.value = target.y;
     }
     runOnJS(bumpControls)();
   }
@@ -182,14 +195,7 @@ export function ZoomableImage({ fileId, fullUrl, quality, chromeVisible, onImage
       }
       const centerX = e.x - cW.value / 2;
       const centerY = e.y - cH.value / 2;
-      const nextX = -centerX * (DOUBLE_TAP_SCALE - 1);
-      const nextY = -centerY * (DOUBLE_TAP_SCALE - 1);
-      const clamped = clampTranslate(DOUBLE_TAP_SCALE, nextX, nextY);
-      translateX.value = withTiming(clamped.x, { duration: 200 });
-      translateY.value = withTiming(clamped.y, { duration: 200 });
-      savedTranslateX.value = clamped.x;
-      savedTranslateY.value = clamped.y;
-      setZoom(DOUBLE_TAP_SCALE);
+      setZoom(DOUBLE_TAP_SCALE, true, centerX, centerY);
     });
 
   const singleTap = Gesture.Tap()
@@ -198,10 +204,25 @@ export function ZoomableImage({ fileId, fullUrl, quality, chromeVisible, onImage
     .requireExternalGestureToFail(doubleTap);
 
   const pinch = Gesture.Pinch()
+    .onStart((e) => {
+      pinchStartFocalX.value = e.focalX - cW.value / 2;
+      pinchStartFocalY.value = e.focalY - cH.value / 2;
+    })
     .onUpdate((e) => {
-      const next = clamp(savedScale.value * e.scale, MIN_SCALE, MAX_SCALE);
+      const startScale = savedScale.value;
+      const next = clamp(startScale * e.scale, MIN_SCALE, MAX_SCALE);
+      const ratio = next / Math.max(startScale, MIN_SCALE);
+      const focalX = e.focalX - cW.value / 2;
+      const focalY = e.focalY - cH.value / 2;
       scale.value = next;
-      const clampedPos = clampTranslate(next, translateX.value, translateY.value);
+      // Preserve the source pixel under the fingers. The current focal point
+      // is used as well as the activation point so a small two-finger drag
+      // while pinching tracks naturally instead of jumping.
+      const clampedPos = clampTranslate(
+        next,
+        focalX - ratio * (pinchStartFocalX.value - savedTranslateX.value),
+        focalY - ratio * (pinchStartFocalY.value - savedTranslateY.value),
+      );
       translateX.value = clampedPos.x;
       translateY.value = clampedPos.y;
     })
@@ -214,6 +235,7 @@ export function ZoomableImage({ fileId, fullUrl, quality, chromeVisible, onImage
     });
 
   const pan = Gesture.Pan()
+    .maxPointers(1)
     .onUpdate((e) => {
       if (savedScale.value <= 1) return;
       const clamped = clampTranslate(savedScale.value, savedTranslateX.value + e.translationX, savedTranslateY.value + e.translationY);
@@ -249,11 +271,12 @@ export function ZoomableImage({ fileId, fullUrl, quality, chromeVisible, onImage
 
   return (
     <View style={{ flex: 1 }} onLayout={onContainerLayout}>
-      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-        {!src ? (
-          <ActivityIndicator size="large" color="white" />
-        ) : (
-          <GestureDetector gesture={composed}>
+      <View style={{ flex: 1, overflow: 'hidden' }}>
+        <GestureDetector gesture={composed}>
+          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+            {!src ? (
+              <ActivityIndicator size="large" color="white" />
+            ) : (
             <Animated.View style={[boxSize ? { width: boxSize.w, height: boxSize.h } : { width: '100%', height: '100%' }, animatedStyle]}>
               <Image
                 source={{ uri: src }}
@@ -278,8 +301,9 @@ export function ZoomableImage({ fileId, fullUrl, quality, chromeVisible, onImage
                 }}
               />
             </Animated.View>
-          </GestureDetector>
-        )}
+            )}
+          </View>
+        </GestureDetector>
       </View>
 
       {/* "Low quality" badge -- shown for as long as anything less than the
