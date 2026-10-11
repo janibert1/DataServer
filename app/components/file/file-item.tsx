@@ -5,7 +5,7 @@ import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { FileIcon } from './file-icon';
 import { formatFileSize, formatDate } from '@/lib/format';
-import { usePreviewUrl } from '@/lib/hooks/use-preview-url';
+import { useThumbnailUrl } from '@/lib/hooks/use-preview-url';
 import { useDragDrop } from './drag-drop-context';
 import type { DriveFile } from '@/lib/types';
 import type { ViewMode } from '@/stores/ui-store';
@@ -20,8 +20,12 @@ interface FileItemProps {
 }
 
 export function FileItem({ file, viewMode, onPress, onLongPress, onMorePress }: FileItemProps) {
-  const hasPreview = !!(file.thumbnailKey || file.previewKey || file.mimeType.startsWith('image/'));
-  const previewUrl = usePreviewUrl(file.id, hasPreview);
+  // Do not ask the thumbnail endpoint to fall back to storageKey: for a
+  // newly-uploaded image with no derivative yet, that fallback is the full
+  // original and defeats the grid's memory budget. The card can show its
+  // lightweight file icon until the next query refresh brings thumbnailKey.
+  const hasThumbnail = !!file.thumbnailKey;
+  const thumbnailUrl = useThumbnailUrl(file.id, hasThumbnail);
   const { isDragging, hoveredTargetId, registerTarget, unregisterTarget, startDrag, moveDrag, endDrag } = useDragDrop();
   const viewRef = useRef<View>(null);
   const isHovered = hoveredTargetId === file.id;
@@ -74,8 +78,15 @@ export function FileItem({ file, viewMode, onPress, onLongPress, onMorePress }: 
             }}
           >
             <View style={{ aspectRatio: 16 / 9, backgroundColor: '#f8fafc', alignItems: 'center', justifyContent: 'center' }}>
-              {previewUrl ? (
-                <Image source={{ uri: previewUrl }} style={{ width: '100%', height: '100%' }} contentFit="cover" recyclingKey={file.id} />
+              {thumbnailUrl ? (
+                <Image
+                  source={{ uri: thumbnailUrl }}
+                  style={{ width: '100%', height: '100%' }}
+                  contentFit="cover"
+                  recyclingKey={file.id}
+                  transition={0}
+                  cachePolicy="memory-disk"
+                />
               ) : (
                 <FileIcon mimeType={file.mimeType} size={36} />
               )}
@@ -114,9 +125,16 @@ export function FileItem({ file, viewMode, onPress, onLongPress, onMorePress }: 
             borderBottomColor: isHovered ? '#2563eb' : '#f1f5f9',
           }}
         >
-          {previewUrl ? (
+          {thumbnailUrl ? (
             <View style={{ width: 40, height: 40, borderRadius: 8, overflow: 'hidden', backgroundColor: '#f1f5f9' }}>
-              <Image source={{ uri: previewUrl }} style={{ width: 40, height: 40 }} contentFit="cover" recyclingKey={file.id} />
+              <Image
+                source={{ uri: thumbnailUrl }}
+                style={{ width: 40, height: 40 }}
+                contentFit="cover"
+                recyclingKey={file.id}
+                transition={0}
+                cachePolicy="memory-disk"
+              />
             </View>
           ) : (
             <View style={{ width: 40, height: 40, borderRadius: 8, backgroundColor: '#f8fafc', alignItems: 'center', justifyContent: 'center' }}>

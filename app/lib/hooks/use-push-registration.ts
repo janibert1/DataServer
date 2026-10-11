@@ -22,11 +22,11 @@ export function usePushRegistration() {
   useEffect(() => {
     (async () => {
       try {
-        const { status: existing } = await Notifications.getPermissionsAsync();
-        let status = existing;
-        if (existing !== 'granted') {
-          const { status: requested } = await Notifications.requestPermissionsAsync();
-          status = requested;
+        const existingPerms: any = await Notifications.getPermissionsAsync();
+        let status = existingPerms?.status;
+        if (status !== 'granted') {
+          const requestedPerms: any = await Notifications.requestPermissionsAsync();
+          status = requestedPerms?.status;
         }
         if (status !== 'granted') return;
 
