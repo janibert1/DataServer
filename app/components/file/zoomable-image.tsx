@@ -43,10 +43,11 @@ interface Props {
   onImageFullyLoaded?: () => void;
   onSwipePrevious?: () => void;
   onSwipeNext?: () => void;
+  cachedThumbnailUrl?: string;
 }
 
 export function ZoomableImage({
-  fileId, fullUrl, quality, chromeVisible, onImageTap, onImageFullyLoaded, onSwipePrevious, onSwipeNext,
+  fileId, fullUrl, quality, chromeVisible, onImageTap, onImageFullyLoaded, onSwipePrevious, onSwipeNext, cachedThumbnailUrl,
 }: Props) {
   const [src, setSrc] = useState<string | null>(null);
   const [isOriginal, setIsOriginal] = useState(false);
@@ -164,9 +165,16 @@ export function ZoomableImage({
     fullyLoadedFileRef.current = null;
 
     let cancelled = false;
-    getFileThumbnailUrl(fileId)
-      .then((data) => { if (!cancelled) setSrc((cur) => cur ?? data.thumbnailUrl); })
-      .catch(() => {});
+    if (cachedThumbnailUrl) {
+      // Neighbor prefetch uses a signed object URL. Reusing that exact URL is
+      // important: asking the backend for another signed URL would create a
+      // different cache key and throw away the warm image we already fetched.
+      setSrc(cachedThumbnailUrl);
+    } else {
+      getFileThumbnailUrl(fileId)
+        .then((data) => { if (!cancelled) setSrc((cur) => cur ?? data.thumbnailUrl); })
+        .catch(() => {});
+    }
     return () => { cancelled = true; };
   }, [fileId]);
 

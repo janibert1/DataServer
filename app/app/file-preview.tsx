@@ -54,7 +54,7 @@ function AudioPreview({ uri }: { uri: string }) {
 }
 
 function PreviewContent({
-  file, previewUrl, quality, chromeVisible, onImageTap, onImageFullyLoaded, onSwipePrevious, onSwipeNext,
+  file, previewUrl, quality, chromeVisible, onImageTap, onImageFullyLoaded, onSwipePrevious, onSwipeNext, cachedThumbnailUrl,
 }: {
   file: DriveFile;
   previewUrl: string | null;
@@ -64,6 +64,7 @@ function PreviewContent({
   onImageFullyLoaded: () => void;
   onSwipePrevious: () => void;
   onSwipeNext: () => void;
+  cachedThumbnailUrl?: string;
 }) {
   if (!previewUrl) {
     return (
@@ -88,6 +89,7 @@ function PreviewContent({
         onImageFullyLoaded={onImageFullyLoaded}
         onSwipePrevious={onSwipePrevious}
         onSwipeNext={onSwipeNext}
+        cachedThumbnailUrl={cachedThumbnailUrl}
       />
     );
   }
@@ -183,6 +185,7 @@ export default function FilePreviewScreen() {
   const [chromeVisible, setChromeVisible] = useState(true);
   const [fullyLoadedImageId, setFullyLoadedImageId] = useState<string | null>(null);
   const prefetchedThumbnailIds = useRef(new Set<string>());
+  const [cachedThumbnails, setCachedThumbnails] = useState<Record<string, string>>({});
   const { data } = useFile(fileId);
   const file = data?.file;
 
@@ -201,6 +204,10 @@ export default function FilePreviewScreen() {
       ...fileIds.slice(Math.max(0, currentIndex - 5), currentIndex),
       ...fileIds.slice(currentIndex + 1, currentIndex + 6),
     ].filter((id) => !prefetchedThumbnailIds.current.has(id));
+    const retainedIds = new Set([fileId, ...nearbyIds, ...fileIds.slice(Math.max(0, currentIndex - 5), currentIndex), ...fileIds.slice(currentIndex + 1, currentIndex + 6)]);
+    setCachedThumbnails((previous) => Object.fromEntries(
+      Object.entries(previous).filter(([id]) => retainedIds.has(id)),
+    ));
     let cancelled = false;
 
     async function prefetchNearbyThumbnails() {
@@ -213,6 +220,7 @@ export default function FilePreviewScreen() {
           await Image.prefetch(thumbnailUrl, 'memory-disk');
           if (cancelled) return;
           prefetchedThumbnailIds.current.add(id);
+          setCachedThumbnails((previous) => ({ ...previous, [id]: thumbnailUrl }));
         } catch {
           // A deleted or inaccessible neighbor should not interrupt the rest.
         }
@@ -333,6 +341,7 @@ export default function FilePreviewScreen() {
               onImageFullyLoaded={handleImageFullyLoaded}
               onSwipePrevious={goPrev}
               onSwipeNext={goNext}
+              cachedThumbnailUrl={cachedThumbnails[file.id]}
             />
           ) : (
             <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
