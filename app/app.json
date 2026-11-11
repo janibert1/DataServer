@@ -33,6 +33,7 @@
         }
       ],
       "expo-secure-store",
+      "./plugins/update-checker",
       [
         "expo-document-picker",
         {
